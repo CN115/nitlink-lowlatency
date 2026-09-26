@@ -123,19 +123,17 @@ public:
     bool IsHDRDiagModeOn() const { return m_hdrDiagMode; }
     void SetHDRDiagMode(bool on) { m_hdrDiagMode = on; }
 
-    // VSync present mode. When on, EndFrame presents with sync (Present(1, 0))
-    // instead of the default immediate ALLOW_TEARING present, letting a VRR or
-    // fixed-refresh display handle tearing. Trades a little latency for none.
+    // VSync uses Present(1, 0), independently of capture pacing. The default
+    // immediate path uses Present(0, ALLOW_TEARING). Driver overrides still apply.
     bool IsVSyncOn() const { return m_vsync; }
-    void SetVSync(bool on) { m_vsync = on; }
-    bool m_vsync = false;
+    void SetVSync(bool on);
 
     // Present-rate cap for the tearing-allowed present, in Hz; 0 turns it
     // off. Chosen by the application from the display refresh rate, the
     // source frame rate, and the present_cap_hz config key. Returns false
     // and leaves the cap alone when a VRR_CAP.txt marker pinned it at
     // Initialize: the marker is a hand-set test rate and must not be
-    // replaced by policy.
+    // replaced by policy. VSync bypasses the cap, including a pinned rate.
     bool SetPresentCap(double hz);
 
     // Average milliseconds per phase since the previous call, then resets.
@@ -286,6 +284,8 @@ public:
     void SetUpscalingEnabled(bool on) { SetPostInputEnabled(on); }
 
 private:
+    bool m_vsync = false;
+
     bool CreateRenderTarget();
     void ReleaseRenderTarget();
     bool CreatePostInputTarget(uint32_t w, uint32_t h);

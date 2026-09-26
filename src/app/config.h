@@ -150,17 +150,21 @@ struct Config {
     // chain at the top of the loop, then read the freshest captured frame and
     // present it on arrival for the lowest input lag. When OFF: the frame is
     // read first and the swap-chain wait moves into BeginFrame, so the held
-    // frame ages up to one refresh before it is presented. The present stays
-    // tearing-allowed either way; OFF only adds input lag. Default ON because
-    // lowest latency is the point.
+    // frame ages up to one refresh before it is presented. The sync
+    // interval is controlled separately by vsync. Default ON keeps the
+    // capture read as late as possible.
     bool         lowLatency = true;
+
+    // Alt+V / F1: synchronize presentation to avoid tearing on fixed-refresh
+    // displays. Kept independent of capture pacing and low-latency reads.
+    bool         vsync = false;
 
     // Present-rate cap for the low-latency tearing-allowed present, in Hz.
     // 0 = automatic: the window's monitor refresh rate minus 3, applied only
     // when that stays at or above the source frame rate, so a variable
     // refresh display engages VRR and a fixed refresh display never drops
     // frames. 30 to 1000 = fixed cap. -1 = no cap. A VRR_CAP.txt file next
-    // to the exe overrides all of these.
+    // to the exe overrides these rates. VSync bypasses the tearing-mode cap.
     int          presentCapHz = 0;
 
     // Display aspect ratio. "auto" shows the source at the ratio the card

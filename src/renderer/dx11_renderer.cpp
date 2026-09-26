@@ -1738,6 +1738,14 @@ bool DX11Renderer::SetPresentCap(double hz)
     return true;
 }
 
+void DX11Renderer::SetVSync(bool on)
+{
+    m_vsync = on;
+    OutputDebugStringW(on
+        ? L"[NitLink/Renderer] VSync ON: Present(1, 0); tearing cap bypassed\n"
+        : L"[NitLink/Renderer] VSync OFF: Present(0, ALLOW_TEARING)\n");
+}
+
 int DX11Renderer::PresentationMode() const
 {
     ComPtr<IDXGISwapChainMedia> media;
@@ -1774,7 +1782,9 @@ void DX11Renderer::WaitForFrameReady()
     // VRR cap (VRR_CAP.txt): pace to ~m_vrrCapHz instead of the swap-chain waitable,
     // so the ALLOW_TEARING present stays under the VRR ceiling and engages VRR. The
     // capture frame is read right after this returns, so it stays fresh.
-    if (m_vrrCapHz > 0.0) {
+    // Sync already schedules presentation; an additional cap can miss a
+    // refresh boundary. This also bypasses diagnostic marker caps under VSync.
+    if (!m_vsync && m_vrrCapHz > 0.0) {
         const auto interval = std::chrono::nanoseconds((long long)(1.0e9 / m_vrrCapHz));
         const auto target   = m_lastPresentTime + interval;
         while (std::chrono::steady_clock::now() < target) {
@@ -2183,8 +2193,7 @@ void DX11Renderer::EndFrame()
     const auto presentStart = std::chrono::steady_clock::now();
     HRESULT hrPresent = S_OK;
     if (m_vsync) {
-        // Synced present: no tearing. On a VRR display the panel still drives
-        // its refresh from this present, so gameplay stays smooth.
+        // ALLOW_TEARING is invalid with a nonzero sync interval.
         hrPresent = m_swapChain->Present(1, 0);
     } else {
         // Immediate present, tearing allowed: lowest latency, relies on the

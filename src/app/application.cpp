@@ -469,6 +469,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         AppLog(L"Initialize: Renderer::Initialize FAILED");
         return false;
     }
+    m_renderer->SetVSync(m_config->vsync);
     AppLog(L"Initialize: renderer initialized");
 
     // Keep the HWND hidden until the renderer and a minimal D2D/DirectWrite
@@ -1267,9 +1268,14 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             CyclePresentPacing();
             return;
         }
+        if (action == L"toggleVSync") {
+            ToggleVSync();
+            return;
+        }
         if (action == L"toggleLowLatency" && m_config) {
             // Low-latency present mode on/off. The run loop reads m_lowLatency
-            // each iteration to choose present-on-arrival vs vsync pacing, so
+            // each iteration to place the swap-chain wait before or after
+            // the capture read. VSync controls the present interval separately;
             // the next frame picks up the change with no pipeline rebuild.
             // m_config->lowLatency is the persisted mirror.
             m_lowLatency = !m_lowLatency;
@@ -1721,10 +1727,11 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             }
         });
 
-    // Alt+L: toggle Low-Latency present mode. ON = present-on-arrival (wait for
-    // the swap chain at the TOP of the loop, then grab the freshest frame and
-    // present it). OFF = VRR/Smooth pacing (skip dup frames, panel follows the
-    // content rate). Lets us A/B the two back-to-back on the rig in one keypress.
+    m_hotkeyManager->Register("toggle_vsync", {VK_MENU, 'V'},
+        [this]() { ToggleVSync(); });
+
+    // Alt+L moves the swap-chain wait before or after the capture read.
+    // Alt+V independently selects synchronized or tearing-allowed presents.
     m_hotkeyManager->Register("toggle_low_latency", {VK_MENU, 'L'},
         [this]() {
             m_lowLatency = !m_lowLatency;
@@ -1797,7 +1804,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         m_renderer->SetColorExpansion(m_config->colorExpansion);
     }
     // Apply the persisted low-latency preference (Alt+L / F1 toggle). The run
-    // loop reads m_lowLatency to choose present-on-arrival vs vsync pacing.
+    // loop reads m_lowLatency to choose when to wait relative to capture.
     m_lowLatency = m_config->lowLatency;
 
     // Spin up the HDR source poller iff the device class supports the
@@ -4029,18 +4036,31 @@ bool Application::ReconcileCaptureFormat(bool force)
     return true;
 }
 
+void Application::ToggleVSync()
+{
+    if (!m_config) return;
+    m_config->vsync = !m_config->vsync;
+    if (m_renderer) m_renderer->SetVSync(m_config->vsync);
+    ApplyPresentCap();
+    if (!m_config->Save("nitlink.json")) {
+        AppLog(L"VSync: could not save nitlink.json");
+    }
+    ShowToast(Tr(m_config->vsync ? L"toast.vsyncOn" : L"toast.vsyncOff"),
+              std::chrono::milliseconds(1800));
+    PushSettingsState();
+}
+
 // Present-rate cap policy for the low-latency tearing-allowed present.
 //
-// A variable-refresh display engages VRR only when presents arrive a few
-// hertz under its maximum: a vsync present never engages it, and an
-// uncapped tearing present overshoots the ceiling and tears. A fixed
-// refresh display gains nothing from the cap and loses frames whenever the
+// The tearing-mode cap keeps presents below the variable-refresh ceiling.
+// Synchronized presents bypass it so a second clock does not delay frames
+// past the next refresh. A fixed-refresh display gains nothing from the cap and loses frames whenever the
 // cap sits under the source rate (a 60 Hz panel with a 60 fps source capped
 // at 57 Hz skips three frames a second). The automatic cap is therefore the
 // monitor refresh minus 3, applied only when that stays at or above the
 // source frame rate. present_cap_hz in nitlink.json: 0 automatic, negative
-// off, 30 to 1000 a fixed rate. A VRR_CAP.txt marker next to the exe wins
-// over all of this inside the renderer.
+// off, 30 to 1000 a fixed rate. A VRR_CAP.txt marker overrides the cap
+// policy inside the renderer, but is also bypassed while VSync is enabled.
 //
 // The refresh rate is read from the current display mode of the monitor
 // under the window. A window dragged to another monitor without a resize
@@ -4048,6 +4068,14 @@ bool Application::ReconcileCaptureFormat(bool force)
 void Application::ApplyPresentCap()
 {
     if (!m_renderer) return;
+    if (m_renderer->IsVSyncOn()) {
+        m_renderer->SetPresentCap(0.0);
+        if (m_appliedPresentCapHz != 0.0) {
+            m_appliedPresentCapHz = 0.0;
+            AppLog(L"PresentCap: bypassed while VSync is enabled");
+        }
+        return;
+    }
 
     // The cap exists to hold a tearing-allowed present a few Hz under the
     // panel maximum so a variable refresh display stays inside its VRR
@@ -4382,7 +4410,6 @@ bool Application::RecoverFromDeviceLost()
         w = cw;
         h = ch;
     }
-    const bool wasVsync     = m_renderer ? m_renderer->IsVSyncOn()          : false;
     const bool wasHDR       = m_renderer ? m_renderer->IsHDREnabled()       : false;
     const bool wasDiag      = m_renderer ? m_renderer->IsHDRDiagModeOn()    : false;
     const bool wasPostInput = m_renderer ? m_renderer->IsPostInputEnabled() : false;
@@ -4442,7 +4469,8 @@ bool Application::RecoverFromDeviceLost()
     }
 
     // Re-apply the live renderer toggles the fresh device reset to defaults.
-    m_renderer->SetVSync(wasVsync);
+    // The saved preference survives even if an earlier rebuild lost the renderer.
+    m_renderer->SetVSync(m_config && m_config->vsync);
     m_renderer->SetHDRDiagMode(wasDiag);
     ApplyPresentCap();
     m_renderer->SetPostInputEnabled(wasPostInput);
@@ -4713,6 +4741,7 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
        << (m_config->presentPacing == kPacingUnique   ? L"unique"
          : m_config->presentPacing == kPacingCaptured ? L"captured"
                                                       : L"refresh") << L"\",";
+    js << L"\"vsync\":"             << (m_config->vsync ? L"true" : L"false") << L",";
     js << L"\"lowLatency\":"        << (m_config->lowLatency        ? L"true" : L"false") << L",";
     js << L"\"preventSleep\":"      << (m_config->preventSleep      ? L"true" : L"false") << L",";
     js << L"\"audioMuted\":"        << (m_config->audioMuted        ? L"true" : L"false") << L",";

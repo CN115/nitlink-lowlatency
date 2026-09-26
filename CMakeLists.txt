@@ -271,6 +271,13 @@ if(BUILD_TESTING)
     )
     add_test(NAME capture_output_policy COMMAND NitLinkCaptureOutputPolicyTests)
 
+    add_executable(NitLinkVSyncConfigTests
+        tests/vsync_config_tests.cpp
+        src/app/config.cpp
+    )
+    target_include_directories(NitLinkVSyncConfigTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME vsync_config_persistence COMMAND NitLinkVSyncConfigTests)
+
     add_executable(NitLinkConfigTests
         tests/config_tests.cpp
         src/app/config.cpp

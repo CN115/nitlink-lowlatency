@@ -359,6 +359,14 @@
             </div>
           </div>
 
+          <div class="row" data-action="toggleVSync"
+            data-i18n-title="tooltip.vsync">
+            <span class="row-name" data-i18n="row.vsync"></span>
+            <div class="row-right">
+              <div class="toggle" id="toggle-vsync"></div>
+            </div>
+          </div>
+
           <div class="row" data-action="togglePreventSleep"
             data-i18n-title="tooltip.preventSleep">
             <span class="row-name" data-i18n="row.preventSleep"></span>
@@ -544,6 +552,7 @@
           <div class="row kv"><span class="row-name" data-i18n="shortcut.settings"></span><span class="row-value">F1</span></div>
           <div class="row kv"><span class="row-name" data-i18n="shortcut.hudOverlay"></span><span class="row-value">Ctrl+F3</span></div>
           <div class="row kv"><span class="row-name" data-i18n="shortcut.lowLatency"></span><span class="row-value">Alt+L</span></div>
+          <div class="row kv"><span class="row-name" data-i18n="shortcut.vsync"></span><span class="row-value">Alt+V</span></div>
           <div class="row kv"><span class="row-name" data-i18n="shortcut.hdr"></span><span class="row-value">Alt+H</span></div>
           <div class="row kv"><span class="row-name" data-i18n="shortcut.colorRange"></span><span class="row-value">Alt+R</span></div>
           <div class="row kv"><span class="row-name" data-i18n="shortcut.aspectRatio"></span><span class="row-value">Alt+A</span></div>
@@ -1275,6 +1284,7 @@
       setToggle('toggle-hdr', s.hdrEnabled);
       setToggle('toggle-color', s.colorExpansion);
       setToggle('toggle-nis', s.nisEnabled);
+      setToggle('toggle-vsync', s.vsync);
       setToggle('toggle-low-latency', s.lowLatency);
       setToggle('toggle-prevent-sleep', s.preventSleep);
       if (s.presentPacing) {

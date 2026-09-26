@@ -151,6 +151,7 @@ bool Config::Load(const std::string& path)
             legacyVrrPacing    = ParseBool(val);
             sawLegacyVrrPacing = true;
         }
+        if (key == "vsync")           vsync = ParseBool(val);
         if (key == "low_latency")     lowLatency = ParseBool(val);
         if (key == "prevent_sleep")  preventSleep = ParseBool(val);
         if (key == "present_cap_hz") presentCapHz = ParseI32(val, presentCapHz, -1, 1000);
@@ -405,9 +406,13 @@ bool Config::Save(const std::string& path)
     file << "# When true, present each frame the instant it arrives for the\n";
     file << "# lowest input lag. When false, the frame is held after capture and\n";
     file << "# the swap-chain wait moves before present, so the picture is up to\n";
-    file << "# one refresh older. The present is tearing-allowed either way;\n";
-    file << "# false only adds input lag. Toggle from the F1 panel or with Alt+L.\n";
+    file << "# one refresh older. VSync controls tearing independently.\n";
+    file << "# Toggle from the F1 panel or with Alt+L.\n";
     file << "low_latency = " << (lowLatency ? "true" : "false") << "\n\n";
+
+    file << "# VSync (Alt+V, default false): synchronize presentation to avoid\n";
+    file << "# tearing. May add input delay; Low-Latency can stay enabled.\n";
+    file << "vsync = " << (vsync ? "true" : "false") << "\n\n";
 
     file << "# Keep the display and PC awake while video is visible.\n";
     file << "# Disabled while minimized, hidden or showing No signal.\n";
@@ -416,6 +421,7 @@ bool Config::Save(const std::string& path)
     file << "# Present-rate cap in Hz for the low-latency present (default 0)\n";
     file << "# 0 = automatic: monitor refresh minus 3, when that is at least the\n";
     file << "# source frame rate. 30-1000 = fixed cap. -1 = no cap.\n";
+    file << "# Bypassed while VSync is enabled.\n";
     file << "present_cap_hz = " << presentCapHz << "\n\n";
 
     file << "# Display aspect ratio: auto (source ratio), stretch (fill the\n";

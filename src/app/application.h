@@ -156,6 +156,7 @@ private:
     // pushes it to the renderer. Called after the capture device opens, on
     // every capture format negotiation, after a device-loss rebuild, and on
     // window resize, which also covers fullscreen toggles.
+    void ToggleVSync();
     void ApplyPresentCap();
 
     // Pushes the configured aspect ratio to the renderer and returns the
