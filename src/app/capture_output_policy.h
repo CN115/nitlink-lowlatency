@@ -208,15 +208,17 @@ constexpr Gc553ProSourceCapturePolicy DecideGc553ProSourceOutputPolicy(
     return {desiredP010, desiredP010 != actualP010, false};
 }
 
-// The renderer's input HDR10 flag describes the source signal, not the MF
-// subtype. Preserve the existing subtype-driven behavior for all other paths.
-// SDR-in-P010 color decoding remains unverified for GC553Pro; this only avoids
-// labeling SDR input as HDR10 and applying the known-PQ SDR tone map to it.
+// Until GC553Pro source detection produces its first valid EOTF, preserve the
+// existing subtype-driven manual fallback. Once the source state is known,
+// use it instead of assuming every P010 stream is HDR10/PQ. Other devices and
+// GC553Pro manual mode retain their existing subtype-driven behavior.
 constexpr bool RendererInputIsHdr10(bool isGc553Pro, bool autoFromSource,
-                                    bool sourceIsHdr10,
+                                    Gc553ProSourceHdrState sourceState,
                                     bool captureIsP010) noexcept {
-    return isGc553Pro && autoFromSource
-        ? sourceIsHdr10 : captureIsP010;
+    if (!isGc553Pro || !autoFromSource ||
+        sourceState == Gc553ProSourceHdrState::Unknown)
+        return captureIsP010;
+    return sourceState == Gc553ProSourceHdrState::Hdr10Pq;
 }
 
 // The source EOTF read is not attached to an MF sample. While a P010 stream is

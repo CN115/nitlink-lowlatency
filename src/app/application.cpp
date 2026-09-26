@@ -1046,7 +1046,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         const bool captureIsP010 = IsEqualGUID(format.subtype, MFVideoFormat_P010);
         m_renderer->SetSourceIsHDR10(RendererInputIsHdr10(
             m_isGC553Pro, m_config && m_config->hdrAutoFromSource,
-            m_sourceIsHDR10, captureIsP010));
+            m_gc553ProSourceState, captureIsP010));
 
         // Thread the negotiated subtype GUID through to the renderer as a
         // stable enum, replacing the renderer's old per-frame byte-count
@@ -3729,7 +3729,8 @@ bool Application::ReconcileCaptureFormat(bool force)
     if (m_isGC553Pro && m_renderer &&
         !m_gc553ProSourceFrameSync.pending) {
         m_renderer->SetSourceIsHDR10(RendererInputIsHdr10(
-            true, m_config->hdrAutoFromSource, m_sourceIsHDR10, actualIsP010));
+            true, m_config->hdrAutoFromSource,
+            m_gc553ProSourceState, actualIsP010));
     }
     const bool hasNonFormatOverride =
         configuredOverride.format.empty() &&
@@ -4096,7 +4097,7 @@ bool Application::ReconcileCaptureFormat(bool force)
             m_gc553ProSourceFrameSync.Reset();
         m_renderer->SetSourceIsHDR10(RendererInputIsHdr10(
             m_isGC553Pro, m_config && m_config->hdrAutoFromSource,
-            m_sourceIsHDR10, captureIsP010));
+            m_gc553ProSourceState, captureIsP010));
 
         // Same subtype-to-enum routing as Initialize. Critical to do this BEFORE
         // StartCapture so the new capture worker thread can never deliver a
@@ -4594,7 +4595,7 @@ bool Application::RecoverFromDeviceLost()
         const bool captureIsP010 = IsEqualGUID(fmt.subtype, MFVideoFormat_P010);
         m_renderer->SetSourceIsHDR10(RendererInputIsHdr10(
             m_isGC553Pro, m_config && m_config->hdrAutoFromSource,
-            m_sourceIsHDR10, captureIsP010));
+            m_gc553ProSourceState, captureIsP010));
         DX11Renderer::CaptureFormatKind rkind;
         if (captureIsP010) {
             rkind = DX11Renderer::CaptureFormatKind::P010;

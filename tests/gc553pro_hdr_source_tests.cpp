@@ -87,12 +87,20 @@ int main() {
                     Gc553ProSourceHdrState::OtherHdr).desiredCaptureIsP010) return 22;
     if (autoPolicy(NegotiatedCaptureFormatKind::NV12,
                    Gc553ProSourceHdrState::OtherHdr).reopenCapture) return 23;
-    // Source EOTF, capture subtype and output preference are independent.
-    if (RendererInputIsHdr10(true, true, false, true)) return 24;
-    if (!RendererInputIsHdr10(true, true, true, false)) return 25;
-    if (!RendererInputIsHdr10(false, true, false, true)) return 26;
-    if (!RendererInputIsHdr10(true, false, false, true)) return 27;
-    if (RendererInputIsHdr10(true, true, false, false)) return 28;
+    // Before the first valid GC553Pro EOTF, preserve the manual P010 fallback
+    // so HDR output off still enables the existing HDR-to-SDR tone map.
+    if (!RendererInputIsHdr10(true, true,
+            Gc553ProSourceHdrState::Unknown, true)) return 24;
+    // Once detection is known, source EOTF wins over the capture container.
+    if (RendererInputIsHdr10(true, true,
+            Gc553ProSourceHdrState::Sdr, true)) return 25;
+    if (!RendererInputIsHdr10(true, true,
+            Gc553ProSourceHdrState::Hdr10Pq, false)) return 26;
+    // Non-GC553Pro and manual GC553Pro paths remain subtype-driven.
+    if (!RendererInputIsHdr10(false, true,
+            Gc553ProSourceHdrState::Sdr, true)) return 27;
+    if (!RendererInputIsHdr10(true, false,
+            Gc553ProSourceHdrState::Sdr, true)) return 28;
 
     Gc553ProSourceStateDebouncer stateDebouncer(
         Gc553ProSourceHdrState::Hdr10Pq);
