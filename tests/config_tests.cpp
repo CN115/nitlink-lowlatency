@@ -55,6 +55,22 @@ int main()
         stretchLoaded.noSignalFit != "stretch" ||
         !stretchLoaded.noSignalDimImage) return 10;
 
+    // Switching back to the branded page preserves the selected image path.
+    // Only the explicit remove-image action clears it.
+    saved.noSignalMode = "default";
+    if (!saved.Save(path.string())) return 11;
+    NitLink::Config defaultWithImageLoaded;
+    if (!defaultWithImageLoaded.Load(path.string()) ||
+        defaultWithImageLoaded.noSignalMode != "default" ||
+        defaultWithImageLoaded.noSignalImage != saved.noSignalImage) return 12;
+
+    saved.noSignalImage.clear();
+    if (!saved.Save(path.string())) return 13;
+    NitLink::Config clearedLoaded;
+    if (!clearedLoaded.Load(path.string()) ||
+        clearedLoaded.noSignalMode != "default" ||
+        !clearedLoaded.noSignalImage.empty()) return 14;
+
     {
         std::ofstream invalid(path, std::ios::trunc);
         invalid << "no_signal_mode = unsupported\n"
@@ -62,12 +78,12 @@ int main()
                 << "no_signal_image = C:\\Users\\測試者\\無訊號.bmp\n";
     }
     NitLink::Config invalidLoaded;
-    if (!invalidLoaded.Load(path.string())) return 11;
+    if (!invalidLoaded.Load(path.string())) return 15;
     if (invalidLoaded.noSignalMode != "default" ||
-        invalidLoaded.noSignalFit != "contain") return 12;
+        invalidLoaded.noSignalFit != "contain") return 16;
 
     if (!std::filesystem::remove(path, ec) && std::filesystem::exists(path)) {
-        return 13;
+        return 17;
     }
 
     std::cout << "custom No Signal config tests passed\n";

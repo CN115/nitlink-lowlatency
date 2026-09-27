@@ -1241,6 +1241,16 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             ChooseNoSignalImage();
             return;
         }
+        if (action == L"clearNoSignalImage" && m_config) {
+            m_config->noSignalImage.clear();
+            m_config->noSignalMode = "default";
+            ApplyNoSignalSettings();
+            if (!m_config->Save("nitlink.json")) {
+                AppLog(L"No Signal image: could not save cleared path to nitlink.json");
+            }
+            PushSettingsState();
+            return;
+        }
         if (action == L"setNoSignalFit" && m_config) {
             const std::wstring requested = extractStr(L"value");
             if (requested == L"contain" || requested == L"cover" ||
@@ -4889,6 +4899,10 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"locale\":\"" << Localization::Instance().LocaleName() << L"\",";
     js << L"\"hdrEnabled\":"        << (m_config->hdrEnabled        ? L"true" : L"false") << L",";
     js << L"\"hdrAutoDetectAvailable\":" << (m_hdrDetectionAvailable ? L"true" : L"false") << L",";
+    // GC553Pro source detection remains a supported device capability while
+    // a missing HDMI signal makes the current XU/EOTF state unavailable.
+    const bool hdrAutoDetectSupported = m_isGC553Pro || m_hdrDetectionAvailable;
+    js << L"\"hdrAutoDetectSupported\":" << (hdrAutoDetectSupported ? L"true" : L"false") << L",";
     js << L"\"colorExpansion\":"    << (m_config->colorExpansion    ? L"true" : L"false") << L",";
     js << L"\"colorExpansionAvailable\":"
        << (m_renderer && m_renderer->IsColorExpansionAvailable() ? L"true" : L"false") << L",";
