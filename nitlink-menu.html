@@ -36,6 +36,10 @@
     a { color: var(--accent-text); }
     a:hover { color: var(--accent); }
     ::selection { background: var(--accent-soft); }
+    .rail, .metabar, #pane-video, #pane-audio, #pane-shortcuts {
+      -webkit-user-select: none;
+      user-select: none;
+    }
     button, select { font: inherit; }
     ::-webkit-scrollbar { width: 12px; }
     ::-webkit-scrollbar-track { background: #191919; }
@@ -135,8 +139,6 @@
     .row-right.end { justify-content: flex-end; }
     .row-chip { color: var(--ink3); font-size: 12px; }
     .row-value { min-width: 0; color: var(--ink); font-size: 13px; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
-    #no-signal-image-row { grid-template-columns: max-content minmax(0, 1fr); }
-    #no-signal-image-row .row-name { white-space: nowrap; }
     .no-signal-image-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .no-signal-choose { flex: none; }
     .no-signal-action {
@@ -276,6 +278,8 @@
       .pane { max-width: none; padding: 10px 0 0; }
       .band { height: 32px; padding: 0 16px; }
       .row { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 16px; }
+      #no-signal-image-row { grid-template-columns: max-content minmax(0, 1fr); }
+      #no-signal-image-row .row-name { white-space: nowrap; }
       .row-chip { display: none; }
       .row-right { justify-content: flex-end; }
       .row:has(.slider-wrap) { grid-template-columns: 1fr; gap: 6px; }
