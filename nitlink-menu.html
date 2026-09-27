@@ -1376,7 +1376,7 @@
       // Tells the user to toggle HDR manually with Alt+H.
       const hdrNotice = document.getElementById('hdr-autodetect-notice');
       if (hdrNotice) {
-        if (s.hdrAutoDetectAvailable === false) {
+        if (s.hdrAutoDetectSupported === false) {
           hdrNotice.removeAttribute('hidden');
         } else {
           hdrNotice.setAttribute('hidden', '');
