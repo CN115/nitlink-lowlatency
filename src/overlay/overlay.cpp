@@ -1287,8 +1287,10 @@ void Overlay::DrawToast(uint32_t windowW, uint32_t windowH,
     m_dwriteFactory->CreateTextLayout(text, static_cast<UINT32>(textLen), fText.Get(),
                                       S(4096.0f), S(200.0f), &measured);
     if (measured) measured->GetMetrics(&metrics);
-    float cardW = std::clamp(metrics.widthIncludingTrailingWhitespace + S(52.0f),
-                             minCardW, maxCardW);
+    const float textSafety = S(2.0f);
+    float cardW = std::clamp(
+        metrics.widthIncludingTrailingWhitespace + S(52.0f) + textSafety,
+        minCardW, maxCardW);
     const float textW = std::max(S(1.0f), cardW - S(52.0f));
     ComPtr<IDWriteTextLayout> wrapped;
     DWRITE_TEXT_METRICS wrappedMetrics{};
@@ -1317,13 +1319,22 @@ void Overlay::DrawToast(uint32_t windowW, uint32_t windowH,
         S(3.5f), S(3.5f));
     m_d2dContext->FillEllipse(dot, bAccent.Get());
 
-    // Text wraps inside the measured card when a localized message is wider
-    // than the available window.
+    // Draw the same layout used to measure wrapping. Re-running layout through
+    // DrawText at the exact measured width can move the final glyph to a new
+    // line because of subpixel rounding. Match the old layout rectangle's
+    // vertical centering before drawing it directly.
     D2D1_RECT_F rText = D2D1::RectF(
         cardX + S(36.0f), cardY + S(8.0f),
         cardX + cardW - S(16.0f), cardY + cardH - S(8.0f));
-    m_d2dContext->DrawText(text, static_cast<UINT32>(textLen),
-        fText.Get(), rText, bFg.Get());
+    if (wrapped) {
+        wrapped->SetMaxHeight(std::max(S(1.0f), rText.bottom - rText.top));
+        m_d2dContext->DrawTextLayout(
+            D2D1::Point2F(rText.left, rText.top), wrapped.Get(), bFg.Get(),
+            D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    } else {
+        m_d2dContext->DrawText(text, static_cast<UINT32>(textLen),
+            fText.Get(), rText, bFg.Get());
+    }
 
     HRESULT hr = m_d2dContext->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET || hr == DXGI_ERROR_DEVICE_REMOVED ||
