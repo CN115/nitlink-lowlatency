@@ -1241,6 +1241,16 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             ChooseNoSignalImage();
             return;
         }
+        if (action == L"clearNoSignalImage" && m_config) {
+            m_config->noSignalImage.clear();
+            m_config->noSignalMode = "default";
+            ApplyNoSignalSettings();
+            if (!m_config->Save("nitlink.json")) {
+                AppLog(L"No Signal image: could not save cleared path to nitlink.json");
+            }
+            PushSettingsState();
+            return;
+        }
         if (action == L"setNoSignalFit" && m_config) {
             const std::wstring requested = extractStr(L"value");
             if (requested == L"contain" || requested == L"cover" ||

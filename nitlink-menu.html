@@ -127,6 +127,7 @@
       min-height: 46px; padding: 8px 22px; border-bottom: 1px solid var(--hair);
       transition: background .1s ease;
     }
+    .row[hidden] { display: none !important; }
     .row[data-action] { cursor: pointer; }
     .row[data-action]:hover { background: rgba(255, 255, 255, 0.035); }
     .row-name { min-width: 0; color: var(--ink2); font-size: 13px; overflow-wrap: anywhere; }
@@ -134,8 +135,16 @@
     .row-right.end { justify-content: flex-end; }
     .row-chip { color: var(--ink3); font-size: 12px; }
     .row-value { min-width: 0; color: var(--ink); font-size: 13px; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+    #no-signal-image-row { grid-template-columns: max-content minmax(0, 1fr); }
+    #no-signal-image-row .row-name { white-space: nowrap; }
     .no-signal-image-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .no-signal-choose { flex: none; }
+    .no-signal-action {
+      flex: none; border: 0; background: none; padding: 0; color: var(--accent-text);
+      cursor: pointer; font: inherit; font-weight: 500;
+    }
+    .no-signal-action:hover { color: var(--accent); }
+    .no-signal-remove:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
     .row.kv { min-height: 42px; }
 
     .notice {
@@ -264,7 +273,7 @@
       .meta { flex-direction: column; align-items: flex-start; gap: 2px; }
       #source-trigger { grid-column: 1 / -1; flex-direction: row; align-items: baseline; gap: 8px; }
       #meta-source { max-width: none; }
-      .pane { max-width: none; padding-top: 10px; }
+      .pane { max-width: none; padding: 10px 0 0; }
       .band { height: 32px; padding: 0 16px; }
       .row { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 16px; }
       .row-chip { display: none; }
@@ -443,7 +452,10 @@
             <span class="row-name" data-i18n="row.noSignalImage"></span>
             <div class="row-right">
               <span class="row-value no-signal-image-name" id="no-signal-image-value"></span>
-              <span class="row-value no-signal-choose" data-i18n="action.choose"></span>
+              <span class="no-signal-action no-signal-choose" data-i18n="action.choose"></span>
+              <button type="button" class="no-signal-action no-signal-remove" id="no-signal-remove"
+                data-action="clearNoSignalImage" data-i18n="action.removeImage"
+                data-i18n-title="tooltip.removeNoSignalImage" hidden></button>
             </div>
           </div>
           <div class="row" id="no-signal-fit-row" data-action="cycleNoSignalFit"
@@ -1311,12 +1323,13 @@
       setText('no-signal-dim-val', s.noSignalDimImage === false
         ? t('value.off') : t('value.on'));
       const customNoSignal = noSignalMode === 'image';
+      const path = typeof s.noSignalImage === 'string' ? s.noSignalImage : '';
       setHidden('no-signal-image-row', !customNoSignal);
       setHidden('no-signal-fit-row', !customNoSignal);
       setHidden('no-signal-dim-row', !customNoSignal);
+      setHidden('no-signal-remove', !customNoSignal || !path);
       const imageValue = document.getElementById('no-signal-image-value');
       if (imageValue) {
-        const path = typeof s.noSignalImage === 'string' ? s.noSignalImage : '';
         const slash = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
         imageValue.textContent = path ? path.substring(slash + 1) : t('meta.none');
         imageValue.title = path || t('meta.none');
