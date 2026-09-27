@@ -12,7 +12,7 @@ namespace NitLink {
 // Colors are D2D1_COLOR_F (R, G, B, A) where each channel is 0.0-1.0.
 //
 // === CURRENT THEME ===
-// Near-black surfaces, amber accent, soft grays: the palette of the F1
+// Near-black surfaces, blue accent, soft grays: the palette of the F1
 // panel. Replace the values in GetTheme() to re-skin everything.
 
 struct Theme {
@@ -63,7 +63,7 @@ inline const Theme& GetTheme() {
         // Foregrounds
         /*text*/      D2D1::ColorF(0.929f, 0.929f, 0.929f, 1.00f), // #EDEDED (--ink)
         /*textDim*/   D2D1::ColorF(0.541f, 0.541f, 0.541f, 1.00f), // #8A8A8A (--ink3)
-        /*accent*/    D2D1::ColorF(0.890f, 0.604f, 0.231f, 1.00f), // #E39A3B, the F1 panel accent
+        /*accent*/    D2D1::ColorF(112.0f / 255.0f, 164.0f / 255.0f, 219.0f / 255.0f, 1.00f), // #70A4DB, the F1 panel accent
         /*hover*/     D2D1::ColorF(0.22f, 0.24f, 0.32f, 1.00f),
 
         // Semantic

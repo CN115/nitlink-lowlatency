@@ -47,6 +47,10 @@ bool Overlay::Initialize(ID3D11Device* device, ID3D11DeviceContext* context,
         return false;
     }
 
+    if (!CreateBrandGeometry()) {
+        OvLog(L"Brand geometry unavailable; using the square indicator");
+    }
+
     // Bridge the D3D11 device to D2D via DXGI -- requires D3D11_CREATE_DEVICE_BGRA_SUPPORT
     ComPtr<IDXGIDevice> dxgiDevice;
     hr = device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
@@ -103,6 +107,79 @@ bool Overlay::Initialize(ID3D11Device* device, ID3D11DeviceContext* context,
     m_initialized = true;
     OvLog(L"Initialized successfully");
     return true;
+}
+
+bool Overlay::CreateBrandGeometry()
+{
+    ComPtr<ID2D1PathGeometry> geometry;
+    HRESULT hr = m_d2dFactory->CreatePathGeometry(&geometry);
+    if (FAILED(hr)) return false;
+
+    ComPtr<ID2D1GeometrySink> sink;
+    hr = geometry->Open(&sink);
+    if (FAILED(hr)) return false;
+
+    // Coordinates match the single-color N artwork used by the app icon.
+    sink->BeginFigure(D2D1::Point2F(268.0f, 144.0f), D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine(D2D1::Point2F(425.0f, 144.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(443.0f, 144.0f), D2D1::Point2F(456.0f, 151.5f), D2D1::Point2F(470.0f, 166.0f)));
+    sink->AddLine(D2D1::Point2F(829.0f, 537.846f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(842.0f, 551.311f), D2D1::Point2F(854.0f, 547.0f), D2D1::Point2F(854.0f, 527.0f)));
+    sink->AddLine(D2D1::Point2F(854.0f, 158.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(854.0f, 142.0f), D2D1::Point2F(862.0f, 134.0f), D2D1::Point2F(878.0f, 145.0f)));
+    sink->AddLine(D2D1::Point2F(991.0f, 224.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(1005.0f, 233.788f), D2D1::Point2F(1014.0f, 245.0f), D2D1::Point2F(1014.0f, 261.0f)));
+    sink->AddLine(D2D1::Point2F(1014.0f, 738.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(1014.0f, 751.0f), D2D1::Point2F(1009.0f, 758.0f), D2D1::Point2F(994.0f, 758.0f)));
+    sink->AddLine(D2D1::Point2F(851.0f, 758.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(831.0f, 758.0f), D2D1::Point2F(816.3f, 751.51f), D2D1::Point2F(802.0f, 737.0f)));
+    sink->AddLine(D2D1::Point2F(432.0f, 361.579f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(420.0f, 349.403f), D2D1::Point2F(405.0f, 351.0f), D2D1::Point2F(405.0f, 372.0f)));
+    sink->AddLine(D2D1::Point2F(405.0f, 746.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(405.0f, 762.0f), D2D1::Point2F(399.0f, 770.0f), D2D1::Point2F(385.0f, 761.0f)));
+    sink->AddLine(D2D1::Point2F(272.0f, 688.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(256.0f, 677.664f), D2D1::Point2F(247.0f, 666.0f), D2D1::Point2F(247.0f, 648.0f)));
+    sink->AddLine(D2D1::Point2F(247.0f, 166.0f));
+    sink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(247.0f, 153.0f), D2D1::Point2F(254.0f, 144.0f), D2D1::Point2F(268.0f, 144.0f)));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    hr = sink->Close();
+    if (FAILED(hr)) return false;
+
+    m_brandGeometry = geometry;
+    return true;
+}
+
+void Overlay::DrawBrandMark(const D2D1_RECT_F& bounds, ID2D1Brush* brush)
+{
+    // A failed optional brand resource retains the original square indicator.
+    if (!m_brandGeometry) {
+        m_d2dContext->FillRectangle(bounds, brush);
+        return;
+    }
+
+    const float width = bounds.right - bounds.left;
+    const float height = bounds.bottom - bounds.top;
+    const float scale = std::min(width / 767.0f, height / 636.0f);
+    const float x = bounds.left + (width - 767.0f * scale) * 0.5f;
+    const float y = bounds.top + (height - 636.0f * scale) * 0.5f;
+    D2D1_MATRIX_3X2_F previous;
+    m_d2dContext->GetTransform(&previous);
+    m_d2dContext->SetTransform(
+        D2D1::Matrix3x2F::Translation(-247.0f, -134.0f) *
+        D2D1::Matrix3x2F::Scale(scale, scale) *
+        D2D1::Matrix3x2F::Translation(x, y) * previous);
+    m_d2dContext->FillGeometry(m_brandGeometry.Get(), brush);
+    m_d2dContext->SetTransform(previous);
 }
 
 bool Overlay::RefreshTextFormats()
@@ -526,6 +603,7 @@ void Overlay::Shutdown()
     ReleaseD2DResources();
     m_d2dContext.Reset();
     m_d2dDevice.Reset();
+    m_brandGeometry.Reset();
     m_d2dFactory.Reset();
     m_textFormat.Reset();
     m_smallTextFormat.Reset();
@@ -620,11 +698,11 @@ void Overlay::Render(const Stats& stats)
         borderBrush.Get(), 1.0f);
 
     // ---- 2. Title band -----------------------------------------------------
-    // Brand mark (amber while a signal is live, red without one), the name,
+    // Brand mark (blue while a signal is live, red without one), the name,
     // and the source resolution on the right.
     {
         const float markY = panel.top + bandH * 0.5f;
-        m_d2dContext->FillRectangle(
+        DrawBrandMark(
             D2D1::RectF(panel.left + pad, markY - 4.0f, panel.left + pad + 8.0f, markY + 4.0f),
             sig ? m_brushAccent.Get() : m_brushCrit.Get());
 
@@ -932,7 +1010,7 @@ void Overlay::DrawNoSignal(uint32_t windowW, uint32_t windowH)
     const D2D1_COLOR_F COL_FG       = D2D1::ColorF(0.910f, 0.918f, 0.929f, 1.0f); // #E8EAED (--fg)
     const D2D1_COLOR_F COL_FG_DIM   = D2D1::ColorF(0.604f, 0.627f, 0.659f, 1.0f); // #9AA0A8 (--fg-mid)
     const D2D1_COLOR_F COL_FG_MUTED = D2D1::ColorF(0.290f, 0.310f, 0.341f, 1.0f); // #4A4F57 (--fg-muted)
-    const D2D1_COLOR_F COL_ACCENT   = D2D1::ColorF(0.890f, 0.604f, 0.231f, 1.0f); // #E39A3B (--accent)
+    const D2D1_COLOR_F COL_ACCENT   = GetTheme().accent; // #70A4DB, shared UI accent
 
     m_d2dContext->BeginDraw();
 
@@ -952,9 +1030,10 @@ void Overlay::DrawNoSignal(uint32_t windowW, uint32_t windowH)
     m_d2dContext->CreateSolidColorBrush(COL_FG_DIM,  &bFgDim);
     m_d2dContext->CreateSolidColorBrush(COL_FG_MUTED,&bFgMuted);
     m_d2dContext->CreateSolidColorBrush(COL_ACCENT,  &bAccent);
-    // --accent-soft equivalent for the status dot halo (rgba 227,154,59 / 0.16).
-    m_d2dContext->CreateSolidColorBrush(
-        D2D1::ColorF(0.890f, 0.604f, 0.231f, 0.16f), &bAccentSoft);
+    // The halo matches the menu accent at the same reduced opacity.
+    D2D1_COLOR_F accentSoft = COL_ACCENT;
+    accentSoft.a = 0.16f;
+    m_d2dContext->CreateSolidColorBrush(accentSoft, &bAccentSoft);
 
     // Type. Segoe UI is the closest stock-Windows analogue to Inter; paired
     // with Cascadia Mono for the version tag / brand sub-label so it matches
@@ -994,12 +1073,14 @@ void Overlay::DrawNoSignal(uint32_t windowW, uint32_t windowH)
     const float ipy = S(28.0f);
 
     // ─── Card row 1: brand block ────────────────────────────────────────
-    // "NitLink" set in the foreground colour with a quiet monospaced
-    // version tag to its right: mirrors the F1 menu's .brand-block layout.
+    // The logo shares the existing brand row so the card retains its layout
+    // and the version stays beside the name.
     const float brandY = cardY + ipy;
     {
+        DrawBrandMark(D2D1::RectF(cardX + ipx, brandY + S(3.0f),
+            cardX + ipx + S(16.0f), brandY + S(19.0f)), bAccent.Get());
         D2D1_RECT_F rLogo = D2D1::RectF(
-            cardX + ipx, brandY,
+            cardX + ipx + S(24.0f), brandY,
             cardX + ipx + S(120.0f), brandY + S(22.0f));
         fBrandLogo->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         const wchar_t* logo = L"NitLink";
@@ -1007,10 +1088,10 @@ void Overlay::DrawNoSignal(uint32_t windowW, uint32_t windowH)
             fBrandLogo.Get(), rLogo, bFg.Get());
 
         D2D1_RECT_F rTag = D2D1::RectF(
-            cardX + ipx + S(64.0f), brandY + S(5.0f),
+            cardX + ipx + S(88.0f), brandY + S(5.0f),
             cardX + ipx + S(180.0f), brandY + S(22.0f));
         fBrandTag->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        const wchar_t* tag = L"v1.2.1";
+        const wchar_t* tag = L"v1.2.2";
         m_d2dContext->DrawText(tag, (UINT32)wcslen(tag),
             fBrandTag.Get(), rTag, bFgMuted.Get());
     }
@@ -1181,7 +1262,8 @@ void Overlay::DrawToast(uint32_t windowW, uint32_t windowH,
     const D2D1_COLOR_F COL_CARD_BG = D2D1::ColorF(0.075f, 0.078f, 0.094f, 0.92f * alpha);
     const D2D1_COLOR_F COL_RULE    = D2D1::ColorF(1.0f,   1.0f,   1.0f,   0.06f * alpha);
     const D2D1_COLOR_F COL_FG      = D2D1::ColorF(0.910f, 0.918f, 0.929f, alpha);
-    const D2D1_COLOR_F COL_ACCENT  = D2D1::ColorF(0.890f, 0.604f, 0.231f, alpha);
+    D2D1_COLOR_F COL_ACCENT = GetTheme().accent;
+    COL_ACCENT.a = alpha;
 
     const size_t textLen  = wcslen(text);
     const float usableW   = std::max(S(80.0f), w - S(48.0f));

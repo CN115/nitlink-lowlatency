@@ -12,7 +12,7 @@
   <script src="locales/zh-TW.js"></script>
   <style>
     :root {
-      --accent: #E39A3B;
+      --accent: #70A4DB;
       --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
       --accent-text: color-mix(in oklab, var(--accent) 82%, #ffffff);
       --bg: #202020;
@@ -46,11 +46,8 @@
     .app { position: fixed; inset: 0; display: flex; align-items: stretch; background: var(--bg); }
 
     .rail { width: 76px; flex: none; display: flex; flex-direction: column; background: var(--chrome); }
-    .rail-brand { display: flex; align-items: center; justify-content: center; gap: 7px; height: 60px; }
-    .rail-brand-mark { width: 10px; height: 10px; background: var(--accent); }
-    .rail-brand-text {
-      font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink2);
-    }
+    .rail-brand { display: flex; align-items: center; justify-content: center; height: 60px; }
+    .rail-brand-mark { width: 30px; height: 30px; display: block; }
     .rail-item {
       position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 5px; height: 60px; background: none; border: 0; cursor: pointer; color: var(--ink3);
@@ -119,6 +116,11 @@
       font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink2);
     }
     .band-hint { color: var(--ink3); font-size: 11.5px; }
+    .advanced[hidden] { display: none; }
+    .advanced > summary { cursor: pointer; list-style: none; }
+    .advanced > summary::-webkit-details-marker { display: none; }
+    .advanced > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .advanced[open] > summary .chevron { transform: rotate(90deg); }
 
     .row {
       display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 240px); align-items: center; gap: 16px;
@@ -249,7 +251,7 @@
       html[data-side="left"] .app { border-right: 1px solid var(--hair2); }
       .rail { width: auto; height: 48px; flex-direction: row; align-items: stretch; border-bottom: 1px solid var(--hair); }
       .rail-brand { height: auto; padding: 0 10px 0 16px; }
-      .rail-brand-text { display: none; }
+      .rail-brand-mark { width: 24px; height: 24px; }
       .rail-item { flex: 1; flex-direction: row; gap: 7px; height: auto; font-size: 12px; }
       .rail-item svg { width: 15px; height: 15px; }
       .rail-item[data-active="true"]::before { left: 0; right: 0; top: auto; bottom: 0; width: auto; height: 2px; }
@@ -278,9 +280,8 @@
   <div class="app">
 
     <nav class="rail" aria-label="" data-i18n-aria-label="top.settings">
-      <div class="rail-brand">
-        <span class="rail-brand-mark"></span>
-        <span class="rail-brand-text">Nit</span>
+      <div class="rail-brand" role="img" aria-label="NitLink">
+        <svg class="rail-brand-mark" viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><defs><linearGradient id="menu-n-left" x1="247" y1="350" x2="455" y2="505" gradientUnits="userSpaceOnUse"><stop stop-color="#919eaf"/><stop offset="1" stop-color="#65778e"/></linearGradient><linearGradient id="menu-n-right" x1="854" y1="141" x2="1014" y2="758" gradientUnits="userSpaceOnUse"><stop stop-color="#30c9ee"/><stop offset=".48" stop-color="#397ef0"/><stop offset="1" stop-color="#865deb"/></linearGradient><linearGradient id="menu-n-fold" x1="470" y1="166" x2="855" y2="758" gradientUnits="userSpaceOnUse"><stop stop-color="#edf0f5"/><stop offset=".35" stop-color="#b2c3dd"/><stop offset=".7" stop-color="#5076bd"/><stop offset="1" stop-color="#35457f"/></linearGradient><clipPath id="menu-n-clip"><path d="M268 144H425C443 144 456 151.5 470 166L829 537.846C842 551.311 854 547 854 527V158C854 142 862 134 878 145L991 224C1005 233.788 1014 245 1014 261V738C1014 751 1009 758 994 758H851C831 758 816.3 751.51 802 737L432 361.579C420 349.403 405 351 405 372V746C405 762 399 770 385 761L272 688C256 677.664 247 666 247 648V166C247 153 254 144 268 144Z"/></clipPath></defs><g id="menu-nitlink-mark" transform="translate(512 512) scale(1.16) translate(-630.5 -452)"><path d="M268 144H425C443 144 456 151.5 470 166L829 537.846C842 551.311 854 547 854 527V158C854 142 862 134 878 145L991 224C1005 233.788 1014 245 1014 261V738C1014 751 1009 758 994 758H851C831 758 816.3 751.51 802 737L432 361.579C420 349.403 405 351 405 372V746C405 762 399 770 385 761L272 688C256 677.664 247 666 247 648V166C247 153 254 144 268 144Z" fill="#485b79" stroke="#394961" stroke-width="5" stroke-linejoin="round"/><g clip-path="url(#menu-n-clip)"><path d="M268 144H425C443 144 456 151.5 470 166L829 537.846C842 551.311 854 547 854 527V158C854 142 862 134 878 145L991 224C1005 233.788 1014 245 1014 261V738C1014 751 1009 758 994 758H851C831 758 816.3 751.51 802 737L432 361.579C420 349.403 405 351 405 372V746C405 762 399 770 385 761L272 688C256 677.664 247 666 247 648V166C247 153 254 144 268 144Z" fill="url(#menu-n-left)"/><path d="M854 527V130H1025V770H750V455L829 537.846C842 551.311 854 547 854 527Z" fill="url(#menu-n-right)"/><path d="M268 144H425C443 144 456 151.5 470 166L1001 716C1009 724.286 1014 730 1014 738C1014 751 1009 758 994 758H851C831 758 816.3 751.51 802 737L256 183C244 170.824 242 144 268 144Z" fill="url(#menu-n-fold)"/></g><path d="M470 166L1001 716" fill="none" stroke="#c1dcf5" stroke-opacity=".65" stroke-width="2.2"/><path d="M256 183L802 737" fill="none" stroke="#bfd6ee" stroke-opacity=".45" stroke-width="2"/></g></svg>
       </div>
       <button class="rail-item" data-tab="pane-video" data-active="true">
         <svg width="19" height="19" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2.5" y="4.5" width="15" height="11" stroke="currentColor" stroke-width="1.4"></rect><rect x="6" y="8" width="8" height="4" fill="currentColor"></rect></svg>
@@ -403,15 +404,6 @@
             <span data-i18n="notice.hdrAutoDetect"></span>
           </div>
 
-          <div class="row" data-action="toggleColorExpansion"
-            data-i18n-title="tooltip.colorRangeExpansion">
-            <span class="row-name" data-i18n="row.colorRangeExpansion"></span>
-            <div class="row-right">
-              <span class="row-chip" data-i18n="chip.autoSafe"></span>
-              <div class="toggle" id="toggle-color"></div>
-            </div>
-          </div>
-
           <div class="band">
             <span class="band-title" data-i18n="section.scaling"></span>
             <span class="band-hint" data-i18n="section.nonNativeWindow"></span>
@@ -422,15 +414,6 @@
             <span class="row-name" data-i18n="row.aspectRatio"></span>
             <div class="row-right">
               <span class="row-value" id="aspect-val"></span>
-              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" class="chevron" aria-hidden="true"><path d="M4 3l4 3-4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-            </div>
-          </div>
-
-          <div class="row" data-action="cycleScaler"
-            data-i18n-title="tooltip.hardwareScaler">
-            <span class="row-name" data-i18n="row.hardwareScaler"></span>
-            <div class="row-right">
-              <span class="row-value" id="scaler-val"></span>
               <svg width="11" height="11" viewBox="0 0 12 12" fill="none" class="chevron" aria-hidden="true"><path d="M4 3l4 3-4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
             </div>
           </div>
@@ -516,6 +499,20 @@
               </select>
             </div>
           </div>
+
+          <details class="advanced" id="color-expansion-advanced" hidden>
+            <summary class="band">
+              <span class="band-title" data-i18n="section.advanced"></span>
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" class="chevron" aria-hidden="true"><path d="M4 3l4 3-4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            </summary>
+            <div class="row" data-action="toggleColorExpansion"
+              data-i18n-title="tooltip.colorRangeExpansion">
+              <span class="row-name" data-i18n="row.colorRangeExpansion"></span>
+              <div class="row-right">
+                <div class="toggle" id="toggle-color"></div>
+              </div>
+            </div>
+          </details>
         </section>
 
         <section class="pane" id="pane-audio">
@@ -578,9 +575,9 @@
         <section class="pane" id="pane-about">
           <div class="band">
             <span class="band-title" data-i18n="section.about"></span>
-            <span class="band-hint">v1.2.1</span>
+            <span class="band-hint">v1.2.2</span>
           </div>
-          <div class="row kv"><span class="row-name" data-i18n="about.build"></span><span class="row-value">1.2.1</span></div>
+          <div class="row kv"><span class="row-name" data-i18n="about.build"></span><span class="row-value">1.2.2</span></div>
           <div class="row kv"><span class="row-name" data-i18n="about.renderer"></span><span class="row-value">D3D11 · P010 / NV12 / BGRA</span></div>
           <div class="about-copy">
             <p data-i18n="about.description"></p>
@@ -1283,6 +1280,7 @@
       const setHidden = (id, hidden) => { const el = document.getElementById(id); if (el) el.hidden = hidden; };
       setToggle('toggle-hdr', s.hdrEnabled);
       setToggle('toggle-color', s.colorExpansion);
+      setHidden('color-expansion-advanced', s.colorExpansionAvailable !== true);
       setToggle('toggle-nis', s.nisEnabled);
       setToggle('toggle-vsync', s.vsync);
       setToggle('toggle-low-latency', s.lowLatency);
@@ -1299,7 +1297,6 @@
         if (slider && slider._setFromCpp) slider._setFromCpp(s.volume * 100);
       }
       setPiPOpacityVisual(s.pipOpacity);
-      setText('scaler-val', s.scalerName === 'AUTO' ? t('value.scalerAuto') : s.scalerName);
       if (s.aspectRatio) setText('aspect-val', localizeValue(s.aspectRatio));
       if (s.panelSide) {
         setText('panel-side-val', localizeValue(s.panelSide));

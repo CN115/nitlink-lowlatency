@@ -13,7 +13,7 @@ REM ============================================================================
 setlocal EnableDelayedExpansion
 
 REM --- Configuration ---------------------------------------------------------
-set VERSION=1.2.1
+set VERSION=1.2.2
 set BUILD_DIR=out\build\x64-Release
 set BUILD_DIR_ALT=build\Release
 set STAGING_DIR=NitLink-%VERSION%-win64
@@ -150,6 +150,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Copying release notes...
+copy /y "release-notes-%VERSION%.md" "%STAGING_DIR%\RELEASE-NOTES.md" >nul
+if errorlevel 1 (
+  echo [ERROR] Release notes are missing.
+  pause
+  exit /b 1
+)
+
 REM --- Optionally copy any MSVC runtime DLLs that landed next to the .exe ----
 REM  If the project is built with /MD (default), Visual Studio sometimes
 REM  stages vcruntime140.dll and msvcp140.dll next to the .exe. If they're
@@ -183,8 +191,8 @@ echo ------------
 echo - Windows 10 ^(1809 or later^) or Windows 11
 echo - DirectX 11 capable GPU
 echo - Microsoft Edge WebView2 runtime ^(preinstalled on Windows 11^)
-echo - Microsoft Visual C++ 2015-2022 Redistributable
-echo  https://aka.ms/vs/17/release/vc_redist.x64.exe
+echo - Microsoft Visual C++ runtime ^(included DLLs or latest x64 Redistributable^)
+echo  https://aka.ms/vc14/vc_redist.x64.exe
 echo - A capture card ^(Elgato 4K Pro/X recommended^) for live preview.
 echo  Without a card, the app will show a "no capture device" message
 echo  and exit; that is expected behavior.
@@ -196,7 +204,8 @@ echo Alt+H  Toggle HDR
 echo Alt+R  Cycle color-range override ^(Auto / Full / Limited^)
 echo Alt+A  Cycle aspect ratio ^(Auto / 4:3 / 16:9 / 16:10 / 21:9 / Stretch^)
 echo Alt+L  Toggle low-latency mode
-echo Alt+Enter  Toggle fullscreen
+echo Alt+V  Toggle VSync
+echo F11 or Alt+Enter  Toggle fullscreen
 echo Alt+O  Toggle picture-in-picture
 echo Ctrl+F3  Toggle HUD overlay
 echo Ctrl+S  Save screenshot to Pictures\NitLink\

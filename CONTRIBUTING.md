@@ -10,7 +10,7 @@ NitLink is a small C++17 project with one maintainer and a bench of Elgato cards
 
 ## Building
 
-Windows 10 or 11, CMake, and Visual Studio 2022 or later with the Desktop C++ workload.
+Windows 10 or 11, CMake, and Visual Studio 2022 or later with the Desktop C++ workload and the C++ ATL for x86 and x64 component matching the selected MSVC toolset. Add ATL under Individual components in the Visual Studio Installer; GC553Pro source detection uses its headers.
 
 ```
 cmake -B build -G "Visual Studio 17 2022" -A x64

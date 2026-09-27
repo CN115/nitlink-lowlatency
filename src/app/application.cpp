@@ -1775,6 +1775,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         [this]() {
             m_sourceRangeOverride = (m_sourceRangeOverride + 1) % 3;
             UpdateCaptureColorInterpretation(m_currentDeviceInfo.name);
+            PushSettingsState();
             const std::wstring rmsg =
                 m_sourceRangeOverride == 1 ? Tr(L"toast.colorRangeFull")
               : m_sourceRangeOverride == 2 ? Tr(L"toast.colorRangeLimited")
@@ -4889,6 +4890,8 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"hdrEnabled\":"        << (m_config->hdrEnabled        ? L"true" : L"false") << L",";
     js << L"\"hdrAutoDetectAvailable\":" << (m_hdrDetectionAvailable ? L"true" : L"false") << L",";
     js << L"\"colorExpansion\":"    << (m_config->colorExpansion    ? L"true" : L"false") << L",";
+    js << L"\"colorExpansionAvailable\":"
+       << (m_renderer && m_renderer->IsColorExpansionAvailable() ? L"true" : L"false") << L",";
     js << L"\"nisEnabled\":"        << (m_config->nisEnabled        ? L"true" : L"false") << L",";
     js << L"\"presentPacing\":\""
        << (m_config->presentPacing == kPacingUnique   ? L"unique"

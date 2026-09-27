@@ -181,3 +181,17 @@ attribution requirements:
 - DWM (`dwmapi`), Windows Imaging Component (`windowscodecs`),
   shell helpers (`shlwapi`, `shcore`), COM (`ole32`, `oleaut32`,
   `propsys`, `uuid`), and `winmm`.
+
+---
+
+## Microsoft Visual C++ runtime
+
+- **Location:** `msvcp140.dll`, `vcruntime140.dll` and `vcruntime140_1.dll`
+  beside the executable in the release package.
+- **Source:** The x64 redistributable runtime directory supplied with the
+  matching Microsoft Visual C++ toolset.
+- **Copyright:** Microsoft Corporation.
+- **License:** Microsoft Visual Studio software license terms. These runtime
+  binaries are not covered by NitLink's MIT license.
+- **Used for:** C++ standard-library and runtime support. Windows supplies
+  the Universal C Runtime; the Edge WebView2 runtime is still separate.

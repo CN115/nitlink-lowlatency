@@ -113,6 +113,8 @@ public:
 
 private:
     bool CreateD2DResources();
+    bool CreateBrandGeometry();
+    void DrawBrandMark(const D2D1_RECT_F& bounds, ID2D1Brush* brush);
     void ReleaseD2DResources();
     // True once the D3D device behind the Direct2D context is gone. Checked
     // at every draw entry point.
@@ -132,6 +134,8 @@ private:
 
     // D2D / DirectWrite for text rendering directly onto the swap chain
     ComPtr<ID2D1Factory1>    m_d2dFactory;
+    // The brand silhouette is device-independent and survives target resizes.
+    ComPtr<ID2D1PathGeometry> m_brandGeometry;
     ComPtr<ID2D1Device>      m_d2dDevice;
     ComPtr<ID2D1DeviceContext> m_d2dContext;
     ComPtr<ID2D1Bitmap1>     m_d2dTargetBitmap;

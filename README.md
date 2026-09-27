@@ -9,9 +9,9 @@ A capture card viewer for Windows. It makes your console feel like part of your 
 Built and tested on the Elgato 4K Pro (PCIe), 4K S (USB), 4K X (USB), and Cam Link 4K (USB).
 
 <p align="center">
-  <a href="https://github.com/nitlink-dev/nitlink/releases/latest"><img src="https://img.shields.io/github/v/release/nitlink-dev/nitlink?label=release&color=E39A3B" alt="Latest release"></a>
-  <a href="https://github.com/nitlink-dev/nitlink/releases"><img src="https://img.shields.io/github/downloads/nitlink-dev/nitlink/total?label=downloads&color=E39A3B" alt="Downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/nitlink-dev/nitlink?color=E39A3B" alt="MIT license"></a>
+  <a href="https://github.com/nitlink-dev/nitlink/releases/latest"><img src="https://img.shields.io/github/v/release/nitlink-dev/nitlink?label=release&color=70A4DB" alt="Latest release"></a>
+  <a href="https://github.com/nitlink-dev/nitlink/releases"><img src="https://img.shields.io/github/downloads/nitlink-dev/nitlink/total?label=downloads&color=70A4DB" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/nitlink-dev/nitlink?color=70A4DB" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6" alt="Windows 10 / 11">
 </p>
 
@@ -76,7 +76,7 @@ NitLink is NOT for you if:
 - **Borderless fullscreen** and **picture-in-picture**.
 - **Prevent sleep while playing.** Enabled by default while captured video is visible, including paused games. Releases when minimized, hidden, showing No signal or closed. Turn off **Prevent sleep** in F1 to keep normal Windows idle sleep behavior. Windows power settings are not changed; manual sleep and policy-enforced screen locking remain available.
 - **Discord Rich Presence** showing playing NitLink. Uses Discord's local IPC pipe only; NitLink itself makes no network connections.
-- **Multi-device source picker.** Live capture-device list in the F1 settings sidebar. Click a connected device to switch without restarting; the selection persists. Generic devices remain SDR-only unless they have an explicit capture policy, such as the GC553Pro manual HDR/P010 path.
+- **Multi-device source picker.** Live capture-device list in the F1 settings sidebar. Click a connected device to switch without restarting; the selection persists. Generic devices remain SDR-only unless they have an explicit capture policy, such as the GC553Pro native P010/HDR path.
 - **Smart signal handling.** Brief HDMI handshake windows (PS5 boot logo, source switch, SDR ↔ HDR transitions) keep showing the last good frame instead of the card's NO SIGNAL placeholder. Real signal loss is detected by format-tagged content fingerprints with a temporal-stability gate.
 
 <p align="center">
@@ -135,7 +135,7 @@ The latency above is *capture latency* (HDMI-into-card → photons-off-your-pane
 
 - **Elgato 4K S: 1080p HDR or 4K SDR, not both.** Its USB 3.2 Gen 1 (5 Gbps) interface can't fit 4K@60 P010 (HDR10, ~12 Gbps). The driver only publishes P010 at 1080p/720p. Elgato lists 4K60 SDR capture via MJPEG and native 4K NV12 at up to 30 fps; negotiated viewer output can be converted by Media Foundation. Hardware ceiling, not a NitLink limitation. See [Elgato's format table](https://www.elgato.com/us/en/explorer/products/capture/4k-s-supported-resolutions-and-frame-rates/).
 - **Elgato 4K S: HDR costs resolution.** Engaging HDR clamps capture to 1080p, so `hdr_enabled` acts as opt-in even with an HDR source connected. `Alt+H` flips between 1080p HDR and 4K SDR at runtime.
-- **AVerMedia GC553Pro HDR is manual.** NitLink does not read a supported HDR InfoFrame interface from this card, so use `Alt+H` to request HDR. P010 modes come exclusively from the card's Media Foundation enumeration; if the requested mode is unavailable, NitLink selects the best native P010 mode and reports it. Manual 1920x1080@60 P010 has been validated on Windows 11; the automatic hardware-selection path is covered by deterministic tests but has not yet been validated on hardware.
+- **AVerMedia GC553Pro HDR depends on native P010 modes.** With Auto capture format and `hdr_auto_from_source` enabled (the default), NitLink reads HDMI source state through the card's UVC extension unit and selects P010 for confirmed HDR10/PQ or NV12 for SDR. Manual formats and the `Alt+H` output preference remain independent. Failed probes retain the last valid source state; until detection succeeds, the existing P010/HDR-to-SDR fallback is preserved. P010 modes come exclusively from Media Foundation enumeration, and unavailable requests fall back to a native mode with a notice. Manual 1920x1080@60 P010 was validated on Windows 11, and the contributor supplied GC553Pro validation for the later fixes. Broader automatic native-mode fallback selection has not been fully validated on GC553Pro hardware.
 - **Windows HDR can be temperamental.** Moving the window across monitors with different HDR profiles, some notification overlays, or apps with custom ICC profiles can cause flickering/desaturation. Closing and reopening NitLink resets the swap chain. A Windows-wide limitation for all HDR apps.
 - **VRR below ~40Hz falls back to fixed refresh.** Most VRR displays have a ~40Hz floor; below it VRR disengages.
 - **Tearing on fixed-refresh displays.** Enable VSync with `Alt+V` or F1 to synchronize presentation. VSync defaults to off and may add input delay. Leave Low-Latency enabled; `Alt+L` does not control VSync. GPU driver overrides still apply: use the application-controlled VSync setting in the driver to follow the NitLink toggle.
@@ -197,7 +197,7 @@ On an LG OLED, set the HDMI input icon to "Game Console" (not "PC") for correct 
 | Elgato 4K X (USB) | ✅ Tested and validated. Source name + resolution + HDR detect via the UVC extension unit; live source-follow. |
 | Elgato Cam Link 4K (USB) | ✅ Validated (generic UVC, SDR, no vendor controls). |
 | Elgato Game Capture 4K60 Pro MK.2 (PCIe) | ✅ Verified by an owner. HDR auto-detect works and colors match Elgato Studio. |
-| AVerMedia Live Gamer ULTRA S GC553Pro (USB) | ✅ Manual 1920x1080@60 P010 HDR validated on Windows 11. Native P010 modes are enumerated through Media Foundation; HDR auto-detection is not implemented. |
+| AVerMedia Live Gamer ULTRA S GC553Pro (USB) | ✅ Manual 1920x1080@60 P010 HDR validated on Windows 11, with later hardware validation supplied by the contributor. Auto capture follows confirmed HDR10/PQ or SDR source state through the UVC extension unit; native P010 modes come from Media Foundation. Broader automatic fallback selection still needs hardware validation. |
 | Other Elgato / AVerMedia / Magewell / Razer | ❓ Untested — generic Media Foundation capture should still work. |
 
 NitLink uses the Media Foundation source reader, which works with any DirectShow / WDM capture device. Elgato-specific paths (HDR auto-detect, vendor tonemap control, source detection) silently no-op on cards that don't expose them; generic SDR capture still works.
@@ -208,7 +208,7 @@ If you have a different card and want official support, open an issue with: card
 
 ## Build
 
-CMake. Tested with Visual Studio 2022 / 2026 Insiders.
+CMake and Visual Studio 2022 or later with the Desktop C++ workload. Also install the C++ ATL for x86 and x64 component matching the selected MSVC toolset (Visual Studio Installer > Individual components); GC553Pro source detection uses its headers. Tested with Visual Studio 2022 / 2026 Insiders.
 
 ```
 git clone https://github.com/nitlink-dev/nitlink
@@ -223,7 +223,7 @@ cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-Output at `out/build/x64-Release/NitLink.exe` (VS) or `build/Release/NitLink.exe` (CLI). The build copies `nitlink-menu.html` and `third_party/nis/NIS_Scaler.h` next to the `.exe` (both needed at runtime).
+Output at `out/build/x64-Release/NitLink.exe` (VS) or `build/Release/NitLink.exe` (CLI). The build copies `nitlink-menu.html`, `locales/en-US.js`, `locales/zh-TW.js` and `third_party/nis/NIS_Scaler.h` beside the `.exe`, preserving their subfolders (all are needed at runtime).
 
 ---
 
@@ -260,7 +260,7 @@ PiP movement, resizing, scaling, and opacity shortcuts can be tapped for one ste
 | `Ctrl + F4` | HDR color-fidelity test patches (A/B against a reference) |
 | `Ctrl + F6` | HDR levels readout (live luma/chroma code range — verify color range per card) |
 
-On the 4K Pro / 4K X, HDR auto-follows the source. On the 4K S, source HDR state is auto-detected but the HDR pipeline is opt-in (it costs resolution); `Alt+H` flips both renderer HDR and capture format at runtime.
+On the 4K Pro / 4K X, HDR auto-follows the source. On the 4K S, source HDR state is auto-detected but the HDR pipeline is opt-in (it costs resolution); `Alt+H` flips both renderer HDR and capture format at runtime. On the GC553Pro, Auto capture follows confirmed HDR10/PQ or SDR source state when `hdr_auto_from_source` is enabled; `Alt+H` changes the output preference independently, and a manually selected capture format remains pinned.
 
 ---
 
@@ -279,7 +279,7 @@ Settings live in `nitlink.json` next to the executable. Plain text; auto-saves o
 - `no_signal_mode`: `default` (NitLink's branded page) or `image`. With `image`, choose a local PNG, JPEG/JPG, or BMP from the F1 **No Signal** section. `no_signal_image` is stored as UTF-8; `no_signal_fit` accepts `contain`, `cover`, or `stretch`, and `no_signal_dim_image` controls the optional 40% black dim layer (`true` by default). The image keeps its intrinsic aspect ratio, remains independent of the normal capture `aspect_ratio`, and is decoded into a cache instead of being read from disk every frame.
 - `panel_side`: `right` (default), `left`, or `full`. Right and left open the F1 panel as a strip beside the picture, which keeps playing underneath. Full covers the window with the wide layout. `panel_width` is the docked width in device-independent pixels (default `420`). Cycle the position from the panel's Video tab.
 - `nis_enabled` / `nis_sharpness` / `nis_scale_mode`: NIS upscaler config.
-- `color_expansion`: limited→full range expansion (default off; NitLink auto-skips when the source is already full-range).
+- `color_expansion`: limited-to-full SDR RGB range expansion (default off). The control appears under F1 > Video > Advanced only for RGB capture with SDR output and limited source range. HDR output, full-range input, NV12 and P010 bypass this setting; the saved preference is retained.
 - `audio_volume` / `audio_muted`: playback level.
 
 ---

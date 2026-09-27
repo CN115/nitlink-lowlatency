@@ -58,6 +58,11 @@ public:
         }
     }
 
+    bool IsColorExpansionAvailable() const {
+        return m_hasFrame && m_captureFormat == CaptureFormatKind::BGRA
+            && !m_hdrEnabled && !m_sourceFullRange;
+    }
+
     // -- HDR ---------------------------------------------------------------
     // Toggle the swap chain between SDR (B8G8R8A8 + sRGB) and HDR10
     // (R10G10B10A2 + DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020: PQ in
