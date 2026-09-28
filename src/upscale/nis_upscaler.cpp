@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <new>
 #include "nis_upscaler.h"
 
 #include <d3dcompiler.h>
@@ -37,7 +39,7 @@ NisUpscaler::~NisUpscaler() { Shutdown(); }
 // ---------------------------------------------------------------------------
 // NIS_Main.hlsl is embedded as a string literal (kNisMainHlsl below).
 // NIS_Scaler.h is loaded from disk via NisIncludeHandler: the handler
-// tries a few plausible relative paths next to the running exe. Both
+// resolves only the packaged header next to the running exe. Both
 // sources come from third_party/nis/ in the repo.
 
 // NIS_Main.hlsl (entry point + bindings) -- see third_party/nis/NIS_Main.hlsl
@@ -109,55 +111,28 @@ public:
     HRESULT __stdcall Open(D3D_INCLUDE_TYPE /*incType*/, LPCSTR pFileName,
                             LPCVOID /*pParentData*/, LPCVOID* ppData, UINT* pBytes) override
     {
-        // Resolve NIS_Scaler.h next to the executable first. CMake copies it to
-        // <exeDir>/third_party/nis/ at build time, but std::ifstream resolves
-        // relative paths against the current working directory, not the exe
-        // directory. An installed or shortcut launch, or "Run as administrator"
-        // (working directory becomes System32), has a working directory
-        // unrelated to the exe, so a CWD-relative lookup misses and silently
-        // disables upscaling. Build the exe-directory prefix and try it first;
-        // keep the CWD-relative candidates as a development fallback.
-        std::string exePrefix;
-        {
-            char exePath[MAX_PATH] = {};
-            DWORD n = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-            if (n > 0 && n < MAX_PATH) {
-                std::string dir(exePath, exePath + n);
-                size_t slash = dir.find_last_of("\\/");
-                if (slash != std::string::npos) {
-                    exePrefix = dir.substr(0, slash + 1) + "third_party/nis/";
-                }
-            }
-        }
-
-        // Try several plausible paths, in priority order.
-        std::string candidates[] = {
-            exePrefix,                    // next to the exe (installed launches)
-            "third_party/nis/",          // running from repo root
-            "../../third_party/nis/",     // running from build subdir
-            "../../../third_party/nis/",  // VS multi-config layouts
-        };
-        std::string body;
-        for (const std::string& prefix : candidates) {
-            if (prefix.empty()) continue;
-            std::string path = prefix + pFileName;
-            std::ifstream f(path, std::ios::binary);
-            if (!f.is_open()) continue;
-            std::stringstream ss;
-            ss << f.rdbuf();
-            body = ss.str();
-            break;
-        }
-        if (body.empty()) {
-            std::wstring wpath(pFileName, pFileName + strlen(pFileName));
-            NisLog(L"include not found: " + wpath);
-            return E_FAIL;
-        }
-
-        char* buf = new char[body.size()];
-        memcpy(buf, body.data(), body.size());
-        *ppData = buf;
-        *pBytes = (UINT)body.size();
+        if (!pFileName || !ppData || !pBytes) return E_POINTER;
+        *ppData = nullptr;
+        *pBytes = 0;
+        if (strcmp(pFileName, "NIS_Scaler.h") != 0) return E_ACCESSDENIED;
+        try {
+            // Assets belong to the executable directory; a caller-controlled
+            // working directory must never supply replacement shader code.
+            std::wstring exe(32768, L'\0');
+            const DWORD length = GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
+            if (!length || length >= exe.size()) return E_FAIL;
+            exe.resize(length);
+            const auto path = std::filesystem::path(exe).parent_path() / L"third_party/nis/NIS_Scaler.h";
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file) return E_FAIL;
+            const auto bytes = file.tellg();
+            if (bytes <= 0 || bytes > 4 * 1024 * 1024) return E_FAIL;
+            file.seekg(0);
+            auto buffer = std::make_unique<char[]>(static_cast<size_t>(bytes));
+            if (!file.read(buffer.get(), bytes)) return E_FAIL;
+            *pBytes = static_cast<UINT>(bytes);
+            *ppData = buffer.release();
+        } catch (...) { return E_OUTOFMEMORY; }
         return S_OK;
     }
     HRESULT __stdcall Close(LPCVOID pData) override

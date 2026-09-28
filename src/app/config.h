@@ -228,6 +228,20 @@ struct Config {
 
     bool Load(const std::string& path);
     bool Save(const std::string& path);
+    enum class LoadIssue { None, ReadFailed, FolderNotWritable, RecoveryRequired };
+    LoadIssue GetLoadIssue() const { return m_loadIssue; }
+    bool LastSaveFailed() const { return m_lastSaveFailed; }
+    const std::wstring& RecoveryBackup() const { return m_recoveryBackup; }
+    const std::wstring& SaveRecovery() const { return m_saveRecovery; }
+
+private:
+    LoadIssue m_loadIssue = LoadIssue::None;
+    bool m_lastSaveFailed = false;
+    std::wstring m_recoveryBackup;
+    std::wstring m_saveRecovery;
+    // A rejected input must survive later routine and shutdown saves.
+    bool m_loadFailed = false;
+    void CheckRecovery(const std::string& path);
 };
 
 } // namespace NitLink

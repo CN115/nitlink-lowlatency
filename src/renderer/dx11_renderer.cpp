@@ -1,3 +1,4 @@
+#include "../common/input_limits.h"
 #include "dx11_renderer.h"
 #include "renderer/hdr_tone_map.h"
 #include "renderer/hdr_tone_map_hlsl.h"
@@ -1511,13 +1512,15 @@ void DX11Renderer::UpdateCaptureTexture(const uint8_t* data, uint32_t size, uint
     // The upload below retains the declared packed row/plane layout: this
     // size guard does not infer another pixel format or an arbitrary stride.
     // Reference: https://learn.microsoft.com/en-us/windows/win32/medfound/image-stride
-    uint32_t expectedSize;
+    uint32_t expectedSize = 0, rowBytes = 0;
+    PixelLayout layout;
     switch (m_sourceFormat) {
-        case CaptureFormatKind::BGRA: expectedSize = width * height * 4;     break;
-        case CaptureFormatKind::NV12: expectedSize = width * height * 3 / 2; break;
-        case CaptureFormatKind::P010: expectedSize = width * height * 3;     break;
-        default:                       expectedSize = 0;                       break;
+        case CaptureFormatKind::BGRA: layout = PixelLayout::Bgra; break;
+        case CaptureFormatKind::NV12: layout = PixelLayout::Nv12; break;
+        case CaptureFormatKind::P010: layout = PixelLayout::P010; break;
+        default: return;
     }
+    if (!data || !FrameLayout(width, height, layout, rowBytes, expectedSize)) return;
     // Permit surplus bytes up to 5% of the packed size, with a 1 KiB floor.
     // A percentage scales the allowance with resolution instead of imposing
     // one small fixed limit on every frame; the floor leaves alignment slack
@@ -1567,7 +1570,7 @@ void DX11Renderer::UpdateCaptureTexture(const uint8_t* data, uint32_t size, uint
     // bytes through the wrong format's branch would memcpy past the source
     // buffer (e.g. BGRA's 4x stride against a 1.5x NV12 buffer). Drop the
     // frame in that case rather than risk a heap stomp.
-    if (m_sourceFormat != m_captureFormat) {
+    if (m_sourceFormat != m_captureFormat || width != m_captureWidth || height != m_captureHeight) {
         OutputDebugStringW(L"[NitLink/Renderer] UpdateCaptureTexture: resource allocation lagging declared format, dropping frame\n");
         return;
     }
@@ -1582,6 +1585,11 @@ void DX11Renderer::UpdateCaptureTexture(const uint8_t* data, uint32_t size, uint
         return;
     }
 
+    if (!mapped.pData || mapped.RowPitch < rowBytes) {
+        m_context->Unmap(m_captureTexture.Get(), 0);
+        return;
+    }
+
     if (m_captureFormat == CaptureFormatKind::NV12) {
         // NV12 source layout: Y plane (width * height bytes), then UV (width * height/2 bytes interleaved)
         // GPU texture layout: same, but with RowPitch stride
@@ -1590,12 +1598,12 @@ void DX11Renderer::UpdateCaptureTexture(const uint8_t* data, uint32_t size, uint
         const uint8_t* srcUV = data + (width * height);
 
         for (uint32_t y = 0; y < height; y++) {
-            memcpy(dst + y * mapped.RowPitch, srcY + y * width, width);
+            memcpy(dst + size_t(y) * mapped.RowPitch, srcY + y * width, width);
         }
 
-        uint8_t* dstUV = dst + (mapped.RowPitch * height);
+        uint8_t* dstUV = dst + (size_t(mapped.RowPitch) * height);
         for (uint32_t y = 0; y < height / 2; y++) {
-            memcpy(dstUV + y * mapped.RowPitch, srcUV + y * width, width);
+            memcpy(dstUV + size_t(y) * mapped.RowPitch, srcUV + y * width, width);
         }
     } else if (m_captureFormat == CaptureFormatKind::P010) {
         // P010 source layout: Y plane is width*height 16-bit values (so
@@ -1620,12 +1628,12 @@ void DX11Renderer::UpdateCaptureTexture(const uint8_t* data, uint32_t size, uint
         const uint8_t* srcUV = data + (yRowBytes * height);
 
         for (uint32_t y = 0; y < height; y++) {
-            memcpy(dst + y * mapped.RowPitch, srcY + y * yRowBytes, yRowBytes);
+            memcpy(dst + size_t(y) * mapped.RowPitch, srcY + y * yRowBytes, yRowBytes);
         }
 
-        uint8_t* dstUV = dst + (mapped.RowPitch * height);
+        uint8_t* dstUV = dst + (size_t(mapped.RowPitch) * height);
         for (uint32_t y = 0; y < height / 2; y++) {
-            memcpy(dstUV + y * mapped.RowPitch, srcUV + y * uvRowBytes, uvRowBytes);
+            memcpy(dstUV + size_t(y) * mapped.RowPitch, srcUV + y * uvRowBytes, uvRowBytes);
         }
     } else {
         // BGRA

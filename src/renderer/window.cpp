@@ -695,6 +695,11 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         // which is harmless for Alt+Enter since there is no system menu.
         break;
 
+    case WM_CLOSE:
+        // Pending settings are committed while the child browser is still alive.
+        if (self && self->m_onClose) self->m_onClose();
+        break;
+
     case WM_DESTROY:
         if (self) self->SetVideoAvailable(false);
         PostQuitMessage(0);

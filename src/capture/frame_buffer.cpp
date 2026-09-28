@@ -1,3 +1,4 @@
+#include "../common/input_limits.h"
 #include "frame_buffer.h"
 #include <windows.h>
 #include <algorithm>
@@ -24,11 +25,13 @@ FrameBuffer::FrameBuffer(uint32_t width, uint32_t height, uint32_t stride)
     // BGRA (width*height*4) is the largest possible frame size at this
     // resolution, so use it as a safe ceiling for all formats. The small
     // extra memory cost is well worth not losing UV data.
-    const uint32_t maxPossibleFrameSize = width * height * 4;
-    const uint32_t strideFrameSize       = stride * height;
-    const uint32_t frameSize = std::max(strideFrameSize, maxPossibleFrameSize);
-    for (int i = 0; i < kNumBuffers; ++i) {
-        m_buffers[i].data.resize(frameSize);
+    const uint32_t frameSize = FrameCapacity(width, height, stride);
+    if (!frameSize) return;
+    try {
+        for (auto& buffer : m_buffers) buffer.data.resize(frameSize);
+    } catch (...) {
+        for (auto& buffer : m_buffers) std::vector<uint8_t>().swap(buffer.data);
+        return;
     }
 
     // Auto-reset, initially non-signaled. Capture activity wakes the render
@@ -76,7 +79,10 @@ void FrameBuffer::Write(const uint8_t* data, uint32_t size, int64_t timestamp,
     if (writeIdx < 0) return; // unreachable with kNumBuffers == 3
 
     auto& buf = m_buffers[writeIdx];
-    uint32_t copySize = std::min(size, (uint32_t)buf.data.size());
+    if (!data || !size || buf.data.empty()) return;
+    // Some drivers append padding after the packed frame. The owned capacity
+    // remains the copy limit, so surplus bytes cannot overflow a slot.
+    const uint32_t copySize = std::min(size, static_cast<uint32_t>(buf.data.size()));
     std::memcpy(buf.data.data(), data, copySize);
     buf.actualSize = copySize;     // remember the real frame length so the
                                     // reader doesn't grab the buffer capacity

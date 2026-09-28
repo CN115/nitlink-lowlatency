@@ -17,6 +17,9 @@ int main()
     // Entering image mode is a reload boundary.
     if (!ShouldReloadNoSignalImage(false, false, true, true)) return 5;
 
+    if (!ShouldReloadNoSignalImage(false, false, true, false)) return 6;
+    if (!ShouldReloadNoSignalImage(false, false, false, false)) return 7;
+
     std::cout << "no signal cache tests passed\n";
     return 0;
 }

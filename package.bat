@@ -11,9 +11,15 @@ REM Output: NitLink-<version>-win64.zip in the repo root.
 REM ============================================================================
 
 setlocal EnableDelayedExpansion
+cd /d "%~dp0"
+if errorlevel 1 (
+  echo [ERROR] Could not open the package source directory.
+  pause
+  exit /b 1
+)
 
 REM --- Configuration ---------------------------------------------------------
-set VERSION=1.2.2
+set VERSION=1.2.3
 set BUILD_DIR=out\build\x64-Release
 set BUILD_DIR_ALT=build\Release
 set STAGING_DIR=NitLink-%VERSION%-win64
@@ -61,6 +67,7 @@ mkdir "%STAGING_DIR%"
 mkdir "%STAGING_DIR%\third_party\nis"
 mkdir "%STAGING_DIR%\docs"
 mkdir "%STAGING_DIR%\locales"
+mkdir "%STAGING_DIR%\assets\menu"
 
 REM --- Copy required files ---------------------------------------------------
 echo Copying NitLink.exe...
@@ -95,6 +102,16 @@ if errorlevel 1 (
   echo [ERROR] zh-TW localization resource is missing from the build output.
   pause
   exit /b 1
+)
+
+echo Copying settings assets...
+for %%F in (menu.js Archivo-400.ttf Archivo-500.ttf Archivo-600.ttf Archivo-OFL.txt kofi-cup.png) do (
+  copy /y "%BUILD_DIR%\assets\menu\%%F" "%STAGING_DIR%\assets\menu\" >nul
+  if errorlevel 1 (
+    echo [ERROR] Required settings asset %%F is missing from the build output.
+    pause
+    exit /b 1
+  )
 )
 
 echo Copying NIS shader header...
@@ -184,13 +201,14 @@ echo 1. Extract this folder anywhere ^(Desktop is fine^).
 echo 2. Double-click NitLink.exe.
 echo.
 echo Windows SmartScreen may warn you because the binary is not yet
-echo code-signed. Click "More info" then "Run anyway" to launch.
+echo code-signed. Verify the source of the download before launching.
 echo.
 echo REQUIREMENTS
 echo ------------
 echo - Windows 10 ^(1809 or later^) or Windows 11
 echo - DirectX 11 capable GPU
-echo - Microsoft Edge WebView2 runtime ^(preinstalled on Windows 11^)
+echo - Current Microsoft Edge WebView2 Evergreen runtime ^(preinstalled on Windows 11^)
+echo   Update the runtime if NitLink reports missing security features.
 echo - Microsoft Visual C++ runtime ^(included DLLs or latest x64 Redistributable^)
 echo  https://aka.ms/vc14/vc_redist.x64.exe
 echo - A capture card ^(Elgato 4K Pro/X recommended^) for live preview.
@@ -225,6 +243,14 @@ echo SUPPORT
 echo -------
 echo Bug reports: https://github.com/nitlink-dev/nitlink/issues
 ) > "%STAGING_DIR%\README.txt"
+
+REM Validate the exact file set and any redistributed Microsoft runtime DLLs.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\validate-package.ps1" -Path "%STAGING_DIR%"
+if errorlevel 1 (
+  echo [ERROR] Package validation failed.
+  pause
+  exit /b 1
+)
 
 REM --- Build the zip ---------------------------------------------------------
 REM  PowerShell's Compress-Archive ships with every Windows 10 / 11.

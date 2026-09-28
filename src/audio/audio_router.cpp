@@ -75,8 +75,27 @@ static GUID EffectiveSubFormat(const WAVEFORMATEX* fmt) {
     return kSubtypeUnknown;
 }
 
+// Shared-mode linear audio must describe the same bytes that the copy and
+// volume loops consume. Driver metadata does not set allocation sizes directly.
+static bool ValidWaveFormat(const WAVEFORMATEX* fmt) {
+    if (!fmt || fmt->nChannels == 0 || fmt->nChannels > 32 ||
+        fmt->nSamplesPerSec < 8000 || fmt->nSamplesPerSec > 768000 ||
+        (fmt->wBitsPerSample != 8 && fmt->wBitsPerSample != 16 &&
+         fmt->wBitsPerSample != 24 && fmt->wBitsPerSample != 32 && fmt->wBitsPerSample != 64)) return false;
+    if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        if (fmt->cbSize != sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) return false;
+        const auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt);
+        if (ext->Samples.wValidBitsPerSample > fmt->wBitsPerSample) return false;
+    } else if (fmt->cbSize != 0) return false;
+    const GUID subtype = EffectiveSubFormat(fmt);
+    if (subtype != kSubtypePcm && subtype != kSubtypeIeeeFloat) return false;
+    if (subtype == kSubtypeIeeeFloat && fmt->wBitsPerSample != 32 && fmt->wBitsPerSample != 64) return false;
+    const uint32_t align = uint32_t(fmt->nChannels) * (fmt->wBitsPerSample / 8);
+    return fmt->nBlockAlign == align && fmt->nAvgBytesPerSec == fmt->nSamplesPerSec * align;
+}
+
 static WAVEFORMATEX* CloneWaveFormat(const WAVEFORMATEX* src) {
-    if (!src) return nullptr;
+    if (!ValidWaveFormat(src)) return nullptr;
     const size_t bytes = sizeof(WAVEFORMATEX) + src->cbSize;
     WAVEFORMATEX* dst = static_cast<WAVEFORMATEX*>(CoTaskMemAlloc(bytes));
     if (!dst) return nullptr;
@@ -97,6 +116,7 @@ static bool SameWaveFormat(const WAVEFORMATEX* a, const WAVEFORMATEX* b) {
 // for a shared-mode mix format are handled; anything else plays at unity
 // rather than being reinterpreted as the wrong sample type.
 static bool ScaleInPlace(BYTE* data, UINT32 frames, const WAVEFORMATEX* fmt, float vol) {
+    if (!data || !ValidWaveFormat(fmt) || !std::isfinite(vol)) return false;
     const GUID sub = EffectiveSubFormat(fmt);
     const size_t sampleCount = (size_t)frames * fmt->nChannels;
 
@@ -340,7 +360,7 @@ bool AudioRouter::SetupCapture()
     if (FAILED(hr)) { AudioLog(L"capture Activate failed " + HrString(hr)); m_lastCaptureError = hr; return false; }
 
     hr = m_captureClient->GetMixFormat(&m_captureFormat);
-    if (FAILED(hr)) { AudioLog(L"capture GetMixFormat failed " + HrString(hr)); return false; }
+    if (FAILED(hr) || !ValidWaveFormat(m_captureFormat)) { AudioLog(L"capture GetMixFormat failed " + HrString(hr)); return false; }
 
     // Initialize with shared mode, 100ms buffer for safety
     hr = m_captureClient->Initialize(
@@ -353,10 +373,10 @@ bool AudioRouter::SetupCapture()
     if (FAILED(hr)) { AudioLog(L"capture Initialize failed " + HrString(hr)); m_lastCaptureError = hr; return false; }
     hr = m_captureClient->SetEventHandle(m_captureEvent);
     if (FAILED(hr)) { AudioLog(L"capture SetEventHandle failed " + HrString(hr)); return false; }
-    FifoReset(m_captureFormat->nBlockAlign, m_captureFormat->nSamplesPerSec);
+    if (!FifoReset(m_captureFormat->nBlockAlign, m_captureFormat->nSamplesPerSec)) return false;
 
     hr = m_captureClient->GetBufferSize(&m_captureBufferFrames);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr) || !m_captureBufferFrames || m_captureBufferFrames > m_captureFormat->nSamplesPerSec * 2) return false;
 
     hr = m_captureClient->GetService(IID_PPV_ARGS(&m_captureService));
     if (FAILED(hr)) return false;
@@ -423,7 +443,7 @@ bool AudioRouter::SetupRender()
         if (FAILED(hr)) return false;
 
         hr = m_renderClient->GetMixFormat(&m_renderFormat);
-        if (FAILED(hr)) { AudioLog(L"render GetMixFormat failed " + HrString(hr)); return false; }
+        if (FAILED(hr) || !ValidWaveFormat(m_renderFormat)) { AudioLog(L"render GetMixFormat failed " + HrString(hr)); return false; }
 
         // Without the engine converting, the only safe case is formats that
         // already agree. Refusing here is deliberate: emitting a mismatched
@@ -444,7 +464,7 @@ bool AudioRouter::SetupRender()
     hr = m_renderClient->SetEventHandle(m_renderEvent);
     if (FAILED(hr)) { AudioLog(L"render SetEventHandle failed " + HrString(hr)); return false; }
     hr = m_renderClient->GetBufferSize(&m_renderBufferFrames);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr) || !m_renderBufferFrames || m_renderBufferFrames > m_renderFormat->nSamplesPerSec * 2) return false;
 
     hr = m_renderClient->GetService(IID_PPV_ARGS(&m_renderService));
     if (FAILED(hr)) return false;
@@ -646,12 +666,15 @@ void AudioRouter::RouteLoop()
     CoUninitialize();
 }
 
-void AudioRouter::FifoReset(UINT32 bytesPerFrame, UINT32 samplesPerSec)
+bool AudioRouter::FifoReset(UINT32 bytesPerFrame, UINT32 samplesPerSec)
 {
+    m_fifo.clear();
+    if (!bytesPerFrame || bytesPerFrame > 256 || !samplesPerSec || samplesPerSec > 768000) return false;
     m_bytesPerFrame = bytesPerFrame;
     m_samplesPerSec = samplesPerSec;
     const size_t frames = (size_t)samplesPerSec * kFifoCapacityMs / 1000;
-    m_fifo.assign(frames * bytesPerFrame, 0);
+    if (frames * bytesPerFrame > 64 * 1024 * 1024) return false;
+    try { m_fifo.assign(frames * bytesPerFrame, 0); } catch (...) { return false; }
     m_fifoHead   = 0;
     m_fifoBytes  = 0;
     m_fifoPrimed = false;
@@ -659,15 +682,16 @@ void AudioRouter::FifoReset(UINT32 bytesPerFrame, UINT32 samplesPerSec)
     m_winIn = m_winOut = m_winUnderrun = m_winOverrun = m_winSlipDrop = m_winSlipDup = 0;
     m_winFillMin = 0xFFFFFFFFu;
     m_winFillMax = 0;
+    return true;
 }
 
 void AudioRouter::FifoPush(const BYTE* data, UINT32 frames, bool silent)
 {
-    if (m_fifo.empty() || m_bytesPerFrame == 0) return;
+    if (m_fifo.empty() || m_bytesPerFrame == 0 || (!silent && !data) || !frames) return;
     size_t bytes = (size_t)frames * m_bytesPerFrame;
     const size_t cap = m_fifo.size();
     if (bytes > cap) {
-        data  += (bytes - cap);
+        if (!silent) data += (bytes - cap);
         bytes  = cap;
     }
     const size_t free = cap - m_fifoBytes;
@@ -694,7 +718,7 @@ void AudioRouter::FifoPush(const BYTE* data, UINT32 frames, bool silent)
 
 UINT32 AudioRouter::FifoPop(BYTE* out, UINT32 frames)
 {
-    if (m_fifo.empty() || m_bytesPerFrame == 0) return 0;
+    if (!out || !frames || m_fifo.empty() || m_bytesPerFrame == 0) return 0;
     size_t bytes = (std::min)((size_t)frames * m_bytesPerFrame, m_fifoBytes);
     bytes -= bytes % m_bytesPerFrame;
     const size_t cap   = m_fifo.size();
@@ -725,6 +749,11 @@ bool AudioRouter::DrainCapture()
         DWORD  flags  = 0;
         hr = m_captureService->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
         if (FAILED(hr)) { HandleStreamError(hr, L"capture GetBuffer", true); return false; }
+        if (frames > m_captureBufferFrames || (!data && frames && !(flags & AUDCLNT_BUFFERFLAGS_SILENT))) {
+            const HRESULT release = m_captureService->ReleaseBuffer(frames);
+            HandleStreamError(FAILED(release) ? release : E_INVALIDARG, L"invalid capture packet", true);
+            return false;
+        }
         FifoPush(data, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
         m_winIn += frames;
         hr = m_captureService->ReleaseBuffer(frames);
@@ -850,7 +879,7 @@ void AudioRouter::LogStatsIfDue()
 
 void AudioRouter::SetVolume(float volume)
 {
-    m_volume = std::clamp(volume, 0.0f, 1.0f);
+    if (std::isfinite(volume)) m_volume = std::clamp(volume, 0.0f, 1.0f);
 }
 
 void AudioRouter::SetMuted(bool muted)

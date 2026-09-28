@@ -40,6 +40,8 @@ public:
     //   the buffer is released or rebuilt.
     ~FrameBuffer();
 
+    bool IsValid() const { return !m_buffers[0].data.empty(); }
+
     // Producer (capture thread) writes frames
     void Write(const uint8_t* data, uint32_t size, int64_t timestamp,
                int64_t arrivalWallNs = 0, uint64_t deviceTimestamp = 0);

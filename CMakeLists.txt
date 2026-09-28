@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NitLink VERSION 1.2.2 LANGUAGES CXX)
+project(NitLink VERSION 1.2.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,11 +13,9 @@ endif()
 # files in the system's default codepage (usually Windows-1252) and chokes
 # on any byte sequence >= 0x80, even in string literals or comments.
 if(MSVC)
-    add_compile_options(/utf-8)
+    add_compile_options(/utf-8 /GS /guard:cf)
+    add_link_options(/guard:cf /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /CETCOMPAT)
 endif()
-
-# Optional: nlohmann_json if installed via vcpkg. Falls back to bundled header.
-find_package(nlohmann_json CONFIG QUIET)
 
 set(NITLINK_SOURCES
     src/main.cpp
@@ -34,6 +32,9 @@ set(NITLINK_SOURCES
     src/app/capture_output_policy.h
     src/app/WebViewSettings.cpp
     src/app/WebViewSettings.h
+    src/app/settings_message.cpp
+    src/app/settings_message.h
+    src/app/webview_policy.h
     src/capture/capture_device.cpp
     src/capture/capture_device.h
     src/capture/dshow_capture.cpp
@@ -67,6 +68,7 @@ set(NITLINK_SOURCES
     src/input/hotkey_manager.h
     src/audio/audio_router.cpp
     src/audio/audio_router.h
+    src/overlay/no_signal_image.cpp
     src/overlay/overlay.cpp
     src/overlay/overlay.h
     src/overlay/no_signal_cache.h
@@ -74,12 +76,16 @@ set(NITLINK_SOURCES
     src/overlay/no_signal_layout.h
     src/upscale/nis_upscaler.cpp
     src/upscale/nis_upscaler.h
+    src/discord/pipe_transport.cpp
     src/discord/discord_rpc.cpp
     src/discord/discord_rpc.h
     src/app.rc
 )
 
 add_executable(NitLink WIN32 ${NITLINK_SOURCES})
+
+# Keep WIL line diagnostics without embedding source filenames in the executable.
+target_compile_definitions(NitLink PRIVATE RESULT_DIAGNOSTICS_LEVEL=2)
 
 target_link_libraries(NitLink PRIVATE
     d3d11
@@ -112,12 +118,6 @@ target_link_libraries(NitLink PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib
 )
 
-if(nlohmann_json_FOUND)
-    target_link_libraries(NitLink PRIVATE nlohmann_json::nlohmann_json)
-else()
-    message(STATUS "nlohmann_json not found - using bundled header")
-endif()
-
 target_include_directories(NitLink PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party
@@ -128,6 +128,7 @@ target_include_directories(NitLink PRIVATE
 install(TARGETS NitLink RUNTIME DESTINATION bin)
 install(FILES nitlink-menu.html DESTINATION bin)
 install(DIRECTORY locales DESTINATION bin)
+install(DIRECTORY assets/menu DESTINATION bin/assets)
 install(FILES third_party/nis/NIS_Scaler.h third_party/nis/LICENSE.txt
         DESTINATION bin/third_party/nis)
 install(FILES LICENSE LICENSES.md ACKNOWLEDGMENTS.md DESTINATION bin)
@@ -147,6 +148,9 @@ add_custom_command(TARGET NitLink POST_BUILD
 # has no output: copy_if_different keeps unchanged files' timestamps stable,
 # while the dependency makes a direct NitLink target build refresh resources.
 add_custom_target(NitLinkRuntimeResources
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/menu
+        $<TARGET_FILE_DIR:NitLink>/assets/menu
     COMMAND ${CMAKE_COMMAND} -E make_directory
         $<TARGET_FILE_DIR:NitLink>/locales
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -163,6 +167,63 @@ add_dependencies(NitLink NitLinkRuntimeResources)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(NitLinkNativeSecurityTests tests/native_security_tests.cpp
+        src/app/config.cpp src/capture/frame_buffer.cpp src/overlay/no_signal_image.cpp)
+    target_include_directories(NitLinkNativeSecurityTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(NitLinkNativeSecurityTests PRIVATE ole32 windowscodecs shlwapi)
+    add_test(NAME native_input_security COMMAND NitLinkNativeSecurityTests)
+
+    add_executable(NitLinkPipeSecurityTests tests/pipe_security_tests.cpp src/discord/pipe_transport.cpp src/discord/discord_rpc.cpp)
+    target_include_directories(NitLinkPipeSecurityTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(NitLinkPipeSecurityTests PRIVATE advapi32)
+    add_test(NAME pipe_security COMMAND NitLinkPipeSecurityTests)
+
+    add_executable(NitLinkMediaSecurityTests tests/media_security_tests.cpp)
+    target_include_directories(NitLinkMediaSecurityTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(NitLinkMediaSecurityTests PRIVATE ole32 oleaut32 strmiids uuid mfuuid avrt)
+    add_test(NAME media_metadata_security COMMAND NitLinkMediaSecurityTests)
+
+    add_executable(NitLinkShaderSecurityTests tests/shader_security_tests.cpp)
+    target_include_directories(NitLinkShaderSecurityTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(NitLinkShaderSecurityTests PRIVATE d3d11 d3dcompiler)
+    add_dependencies(NitLinkShaderSecurityTests NitLink)
+    add_test(NAME packaged_shader_security COMMAND NitLinkShaderSecurityTests)
+    set_tests_properties(packaged_shader_security PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/tests")
+
+    add_executable(NitLinkSettingsSecurityTests
+        src/app/localization.cpp
+        tests/settings_security_tests.cpp
+        src/app/settings_message.cpp
+        src/app/game_database.cpp
+    )
+    target_include_directories(NitLinkSettingsSecurityTests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party/webview2/include)
+    add_test(NAME settings_security COMMAND NitLinkSettingsSecurityTests)
+
+    option(NITLINK_TEST_WEBVIEW_RUNTIME "Run the isolated, software-rendered WebView2 host test" ON)
+    if(NITLINK_TEST_WEBVIEW_RUNTIME)
+        add_executable(NitLinkWebViewRuntimeTests
+            tests/webview_runtime_tests.cpp
+            src/app/WebViewSettings.cpp
+            src/app/settings_message.cpp
+            src/app/game_database.cpp
+        )
+        target_include_directories(NitLinkWebViewRuntimeTests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party
+            ${CMAKE_SOURCE_DIR}/third_party/webview2/include)
+        target_link_libraries(NitLinkWebViewRuntimeTests PRIVATE ole32 oleaut32 shlwapi
+            ${CMAKE_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib)
+        add_dependencies(NitLinkWebViewRuntimeTests NitLinkRuntimeResources)
+        add_test(NAME webview_runtime_security COMMAND NitLinkWebViewRuntimeTests)
+        set_tests_properties(webview_runtime_security PROPERTIES TIMEOUT 60)
+        add_test(NAME webview_missing_assets
+            COMMAND ${CMAKE_COMMAND}
+                "-DTEST_EXE=$<TARGET_FILE:NitLinkWebViewRuntimeTests>"
+                "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/webview-missing-assets"
+                -P "${CMAKE_SOURCE_DIR}/tests/webview_missing_assets.cmake")
+        set_tests_properties(webview_missing_assets PROPERTIES TIMEOUT 60)
+    endif()
+
     add_executable(NitLinkToneMapTests
         tests/hdr_tone_map_reference_tests.cpp
         src/renderer/hdr_tone_map.h

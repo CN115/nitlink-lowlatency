@@ -19,15 +19,12 @@ int WINAPI WinMain(
     _In_ LPSTR lpCmdLine,
     _In_ int nCmdShow)
 {
-    // Harden the DLL search path before anything else runs. This drops the
-    // current working directory (and other unsafe locations) from the default
-    // search order so a DLL planted next to wherever the app was launched
-    // can't hijack a dependency loaded later, notably WebView2Loader.dll,
-    // pulled in when the settings overlay initializes. LOAD_LIBRARY_SEARCH_
-    // DEFAULT_DIRS keeps System32 and the executable's own directory, which is
-    // where NitLink's real dependencies live. Best-effort: nothing to do if it
-    // fails, the app still runs (just without the hardening).
-    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    // Runtime dependencies resolve only beside the executable or in System32.
+    // A failed policy setup must not silently restore working-directory lookup.
+    if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+        MessageBoxW(nullptr, L"Unable to configure secure library loading.", L"NitLink", MB_ICONERROR);
+        return 1;
+    }
 
     // Opt into per-monitor DPI awareness BEFORE creating any windows.
     // Without this, Windows lies about pixel sizes when DPI scaling is
@@ -63,21 +60,22 @@ int WINAPI WinMain(
         return 1;
     }
 
+    int exitCode = 0;
     {
         NitLink::Application app;
         
         if (!app.Initialize(hInstance, nCmdShow)) {
             MessageBoxW(nullptr, NitLink::Localization::Instance().Get(L"error.application").c_str(),
                         L"NitLink", MB_ICONERROR);
-            MFShutdown();
-            CoUninitialize();
-            return 1;
+            exitCode = 1;
+        } else {
+            app.Run();
         }
-
-        app.Run();
     }
 
-    MFShutdown();
+    // Application teardown can release COM objects even after initialization
+    // fails, so the platform services outlive the application in both paths.
+    if (FAILED(MFShutdown())) exitCode = 1;
     CoUninitialize();
-    return 0;
+    return exitCode;
 }

@@ -1,3 +1,5 @@
+#include "../common/input_limits.h"
+#include <atomic>
 #include "dshow_capture.h"
 
 #include <dshow.h>
@@ -33,16 +35,33 @@ static void DeleteMT(AM_MEDIA_TYPE* mt) {
     CoTaskMemFree(mt);
 }
 static HRESULT CopyMT(AM_MEDIA_TYPE* dst, const AM_MEDIA_TYPE* src) {
-    *dst = *src;
-    if (src->cbFormat && src->pbFormat) {
-        dst->pbFormat = (BYTE*)CoTaskMemAlloc(src->cbFormat);
-        if (!dst->pbFormat) { dst->cbFormat = 0; return E_OUTOFMEMORY; }
-        memcpy(dst->pbFormat, src->pbFormat, src->cbFormat);
-    } else {
-        dst->pbFormat = nullptr; dst->cbFormat = 0;
+    if (!dst || !src) return E_POINTER;
+    *dst = {};
+    if (src->cbFormat > 64 * 1024 || (src->cbFormat && !src->pbFormat)) return E_INVALIDARG;
+    AM_MEDIA_TYPE copy = *src;
+    copy.pbFormat = nullptr;
+    if (src->cbFormat) {
+        copy.pbFormat = static_cast<BYTE*>(CoTaskMemAlloc(src->cbFormat));
+        if (!copy.pbFormat) return E_OUTOFMEMORY;
+        memcpy(copy.pbFormat, src->pbFormat, src->cbFormat);
     }
-    if (dst->pUnk) dst->pUnk->AddRef();
+    if (copy.pUnk) copy.pUnk->AddRef();
+    *dst = copy;
     return S_OK;
+}
+static bool ValidNV12Type(const AM_MEDIA_TYPE* mt) {
+    if (!mt || mt->majortype != MEDIATYPE_Video || mt->subtype != MFVideoFormat_NV12 ||
+        mt->formattype != FORMAT_VideoInfo || !mt->pbFormat ||
+        mt->cbFormat < sizeof(VIDEOINFOHEADER) || mt->cbFormat > 64 * 1024) return false;
+    const auto& header = *reinterpret_cast<const VIDEOINFOHEADER*>(mt->pbFormat);
+    const int64_t height = header.bmiHeader.biHeight;
+    const uint64_t absHeight = height < 0 ? -height : height;
+    uint32_t row = 0, bytes = 0;
+    return header.bmiHeader.biWidth > 0 && absHeight <= kMaxVideoDimension &&
+        header.AvgTimePerFrame >= 10000 &&
+        FrameLayout(static_cast<uint32_t>(header.bmiHeader.biWidth), static_cast<uint32_t>(absHeight),
+                    PixelLayout::Nv12, row, bytes) &&
+        FrameCapacity(static_cast<uint32_t>(header.bmiHeader.biWidth), static_cast<uint32_t>(absHeight), row);
 }
 static AM_MEDIA_TYPE* CreateMT(const AM_MEDIA_TYPE* src) {
     auto* mt = (AM_MEDIA_TYPE*)CoTaskMemAlloc(sizeof(AM_MEDIA_TYPE));
@@ -62,7 +81,7 @@ class SinkFilter; // fwd
 class SinkEnumMediaTypes : public IEnumMediaTypes {
 public:
     SinkEnumMediaTypes(const AM_MEDIA_TYPE* mt) {
-        if (mt) { CopyMT(&m_mt, mt); m_has = true; }
+        if (mt) m_has = SUCCEEDED(CopyMT(&m_mt, mt));
     }
     ~SinkEnumMediaTypes() { if (m_has) FreeMTContents(&m_mt); }
 
@@ -110,7 +129,7 @@ public:
 
     void SetOfferType(const AM_MEDIA_TYPE* mt) {
         FreeMTContents(&m_offerMt);
-        if (mt) { CopyMT(&m_offerMt, mt); m_hasOffer = true; }
+        m_hasOffer = mt && SUCCEEDED(CopyMT(&m_offerMt, mt));
     }
 
     // IUnknown (delegates lifetime to the filter)
@@ -147,7 +166,7 @@ public:
     ComPtr<IPin>  m_connected;
     AM_MEDIA_TYPE m_offerMt{};  bool m_hasOffer = false;
     AM_MEDIA_TYPE m_connMt{};   bool m_hasConn  = false;
-    volatile bool m_flushing = false;
+    std::atomic<bool> m_flushing{false};
 };
 
 // ---------------------------------------------------------------------------
@@ -259,7 +278,7 @@ STDMETHODIMP_(ULONG) SinkPin::Release() { return m_filter->Release(); }
 
 STDMETHODIMP SinkPin::QueryAccept(const AM_MEDIA_TYPE* pmt) {
     if (!pmt) return E_POINTER;
-    if (pmt->majortype == MEDIATYPE_Video && pmt->subtype == MFVideoFormat_NV12) return S_OK;
+    if (ValidNV12Type(pmt)) return S_OK;
     return S_FALSE;
 }
 STDMETHODIMP SinkPin::ReceiveConnection(IPin* c, const AM_MEDIA_TYPE* pmt) {
@@ -267,7 +286,10 @@ STDMETHODIMP SinkPin::ReceiveConnection(IPin* c, const AM_MEDIA_TYPE* pmt) {
     if (m_connected) return VFW_E_ALREADY_CONNECTED;
     if (QueryAccept(pmt) != S_OK) return VFW_E_TYPE_NOT_ACCEPTED;
     FreeMTContents(&m_connMt);
-    CopyMT(&m_connMt, pmt); m_hasConn = true;
+    m_hasConn = false;
+    const HRESULT hr = CopyMT(&m_connMt, pmt);
+    if (FAILED(hr)) return hr;
+    m_hasConn = true;
     m_connected = c;
     return S_OK;
 }
@@ -310,6 +332,8 @@ STDMETHODIMP SinkPin::EnumMediaTypes(IEnumMediaTypes** e) {
     return S_OK;
 }
 STDMETHODIMP SinkPin::ReceiveMultiple(IMediaSample** s, long n, long* nProc) {
+    if (nProc) *nProc = 0;
+    if (n < 0 || (n && !s)) return E_INVALIDARG;
     long done = 0;
     for (long i = 0; i < n; i++) { if (Receive(s[i]) != S_OK) break; done++; }
     if (nProc) *nProc = done;
@@ -350,7 +374,7 @@ struct DShowGraph {
         BYTE* p = nullptr;
         if (FAILED(s->GetPointer(&p)) || !p) return;
         long len = s->GetActualDataLength();
-        if (len <= 0) return;
+        if (len <= 0 || len > s->GetSize() || static_cast<uint64_t>(len) > kMaxFrameBytes) return;
 
         REFERENCE_TIME t0 = 0, t1 = 0; int64_t ts = 0;
         if (s->GetTime(&t0, &t1) == S_OK) ts = (int64_t)t0;  // 100ns units
@@ -421,7 +445,7 @@ static AM_MEDIA_TYPE* ConfigureNV12(IPin* outPin) {
 
     int count = 0, size = 0;
     if (FAILED(cfg->GetNumberOfCapabilities(&count, &size)) || count <= 0) return nullptr;
-    if (size < (int)sizeof(VIDEO_STREAM_CONFIG_CAPS)) return nullptr;
+    if (count > 4096 || size > 64 * 1024 || size < (int)sizeof(VIDEO_STREAM_CONFIG_CAPS)) return nullptr;
 
     std::vector<BYTE> capsbuf(size);
     AM_MEDIA_TYPE* best = nullptr;
@@ -435,7 +459,7 @@ static AM_MEDIA_TYPE* ConfigureNV12(IPin* outPin) {
             mt->formattype == FORMAT_VideoInfo && mt->pbFormat &&
             mt->cbFormat >= sizeof(VIDEOINFOHEADER)) {
             VIDEOINFOHEADER* vih = (VIDEOINFOHEADER*)mt->pbFormat;
-            if (vih->bmiHeader.biWidth == 1920 && labs(vih->bmiHeader.biHeight) == 1080) {
+            if (vih->bmiHeader.biWidth == 1920 && std::abs(static_cast<int64_t>(vih->bmiHeader.biHeight)) == 1080) {
                 auto* vcaps = (VIDEO_STREAM_CONFIG_CAPS*)capsbuf.data();
                 REFERENCE_TIME want = 69444; // ~144 fps
                 if (want < vcaps->MinFrameInterval) want = vcaps->MinFrameInterval;
@@ -450,11 +474,14 @@ static AM_MEDIA_TYPE* ConfigureNV12(IPin* outPin) {
 
     if (!best) return nullptr;
 
-    cfg->SetFormat(best); // best-effort; some drivers clamp fps
+    if (FAILED(cfg->SetFormat(best))) { DeleteMT(best); return nullptr; }
 
     AM_MEDIA_TYPE* cur = nullptr;
-    if (cfg->GetFormat(&cur) == S_OK && cur) { DeleteMT(best); return cur; }
-    return best;
+    const HRESULT readback = cfg->GetFormat(&cur);
+    DeleteMT(best);
+    if (readback == S_OK && ValidNV12Type(cur)) return cur;
+    DeleteMT(cur);
+    return nullptr;
 }
 
 bool DShowCapture::Open(const DeviceInfo& device) {
@@ -465,7 +492,7 @@ bool DShowCapture::Open(const DeviceInfo& device) {
                                 IID_PPV_ARGS(m_impl->graph.GetAddressOf()))) || !m_impl->graph) {
         DLog(L"CoCreateInstance(FilterGraph) failed"); return false;
     }
-    m_impl->graph->QueryInterface(IID_PPV_ARGS(m_impl->control.GetAddressOf()));
+    if (FAILED(m_impl->graph->QueryInterface(IID_PPV_ARGS(m_impl->control.GetAddressOf())))) return false;
 
     m_impl->capture = FindCaptureFilter(device.name);
     if (!m_impl->capture) { DLog(L"capture device not found by name: " + device.name); return false; }
@@ -480,10 +507,10 @@ bool DShowCapture::Open(const DeviceInfo& device) {
     if (!negMt) { DLog(L"could not negotiate NV12 1080p on capture pin"); return false; }
 
     // Publish the negotiated format for the renderer.
-    if (negMt->pbFormat && negMt->cbFormat >= sizeof(VIDEOINFOHEADER)) {
+    if (ValidNV12Type(negMt)) {
         VIDEOINFOHEADER* vih = (VIDEOINFOHEADER*)negMt->pbFormat;
         m_format.width  = (uint32_t)vih->bmiHeader.biWidth;
-        m_format.height = (uint32_t)labs(vih->bmiHeader.biHeight);
+        m_format.height = (uint32_t)std::abs(static_cast<int64_t>(vih->bmiHeader.biHeight));
         m_format.fps    = vih->AvgTimePerFrame ? (uint32_t)(10000000LL / vih->AvgTimePerFrame) : 0;
         m_format.stride = m_format.width;          // NV12: Y plane stride == width
         m_format.subtype = MFVideoFormat_NV12;
@@ -495,6 +522,7 @@ bool DShowCapture::Open(const DeviceInfo& device) {
     m_impl->sink = new SinkFilter(m_impl.get());
     m_impl->sinkBase.Attach(static_cast<IBaseFilter*>(m_impl->sink));
     m_impl->sink->m_pin.SetOfferType(negMt);
+    if (!m_impl->sink->m_pin.m_hasOffer) { DeleteMT(negMt); return false; }
 
     if (FAILED(m_impl->graph->AddFilter(m_impl->sinkBase.Get(), L"NitLinkSink"))) {
         DLog(L"AddFilter(sink) failed"); DeleteMT(negMt); return false;

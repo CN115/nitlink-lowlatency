@@ -253,6 +253,11 @@ private:
     std::unique_ptr<NisUpscaler>       m_nisUpscaler;
     std::unique_ptr<FrameDiffer>       m_frameDiffer;
     std::unique_ptr<WebViewSettings>   m_webviewSettings;
+    std::wstring m_failedNoSignalPath;
+    std::wstring m_failedNoSignalReason;
+    std::wstring ConfigWarning() const;
+    void DrawStatusNotice(bool takingScreenshot);
+    bool m_settingsOpenPending = false;
     bool m_settingsVisible = false;
     std::unique_ptr<Config>           m_config;
     std::unique_ptr<DiscordRPC>       m_discord;
@@ -279,6 +284,8 @@ private:
     // facing status messages like "Windows HDR not engaged" so users
     // don't have to read DebugView to see why a hotkey appeared to do
     // nothing.
+    std::wstring m_lastConfigWarning;
+    bool m_toastIsConfigWarning = false;
     std::wstring                          m_toastText;
     std::chrono::steady_clock::time_point m_toastExpiry{};
     void ShowToast(const std::wstring& text,
@@ -296,6 +303,7 @@ private:
     // cleared after emission so the same toast does not re-fire on
     // subsequent state pushes.
     std::wstring m_lastScreenshotPath;
+    std::wstring m_screenshotToReveal;
 
     // Auto-detected HDR source state. Populated initially by Initialize via
     // the Elgato HDR InfoFrame read; updated at runtime by ReconcileCaptureFormat

@@ -1,3 +1,4 @@
+#include "no_signal_image.h"
 #include "overlay.h"
 #include "../ui/theme.h"
 #include "../app/localization.h"
@@ -272,12 +273,13 @@ bool Overlay::SetNoSignalSettings(const std::string& mode,
 
     if (m_noSignalMode != "image") return true;
     if (imagePath.empty()) {
+        m_noSignalImageError = ImageLoadError::None;
         m_noSignalBitmap.Reset();
         m_noSignalPixels.clear();
         m_noSignalImageWidth = 0;
         m_noSignalImageHeight = 0;
         m_noSignalImageStride = 0;
-        return false;
+        return true;
     }
 
     if (ShouldReloadNoSignalImage(forceReload, pathChanged, modeChanged,
@@ -317,86 +319,31 @@ bool Overlay::LoadNoSignalImage(const std::wstring& imagePath)
         return false;
     };
 
-    if (!m_wicFactory) return fail(L"WIC factory is unavailable");
-    if (imagePath.empty()) return fail(L"path is empty");
-
-    ComPtr<IWICBitmapDecoder> decoder;
-    HRESULT hr = m_wicFactory->CreateDecoderFromFilename(
-        imagePath.c_str(), nullptr, GENERIC_READ,
-        WICDecodeMetadataCacheOnLoad, &decoder);
-    if (FAILED(hr)) {
-        std::wstringstream ss;
-        ss << L"CreateDecoderFromFilename failed: 0x" << std::hex << hr;
-        return fail(ss.str());
+    DecodedImage image;
+    ImageLoadDiagnostic diagnostic;
+    if (!DecodeNoSignalImage(m_wicFactory.Get(), imagePath, image, &m_noSignalImageError, &diagnostic)) {
+        std::wstringstream detail;
+        if (diagnostic.operation)
+            detail << diagnostic.operation << L" failed: hr=0x" << std::hex << diagnostic.result;
+        else
+            detail << L"image rejected";
+        if (diagnostic.driveType != UINT_MAX) detail << L", drive type=" << std::dec << diagnostic.driveType;
+        detail << L", reason=" << ImageLoadErrorKey(m_noSignalImageError);
+        return fail(detail.str());
     }
-
-    ComPtr<IWICBitmapFrameDecode> frame;
-    hr = decoder->GetFrame(0, &frame);
-    if (FAILED(hr)) {
-        std::wstringstream ss;
-        ss << L"GetFrame failed: 0x" << std::hex << hr;
-        return fail(ss.str());
-    }
-
-    ComPtr<IWICFormatConverter> converter;
-    hr = m_wicFactory->CreateFormatConverter(&converter);
-    if (FAILED(hr)) {
-        std::wstringstream ss;
-        ss << L"CreateFormatConverter failed: 0x" << std::hex << hr;
-        return fail(ss.str());
-    }
-    hr = converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
-                               WICBitmapDitherTypeNone, nullptr, 0.0,
-                               WICBitmapPaletteTypeCustom);
-    if (FAILED(hr)) {
-        std::wstringstream ss;
-        ss << L"FormatConverter::Initialize failed: 0x" << std::hex << hr;
-        return fail(ss.str());
-    }
-
-    UINT width = 0;
-    UINT height = 0;
-    hr = converter->GetSize(&width, &height);
-    if (FAILED(hr) || width == 0 || height == 0 ||
-        width > std::numeric_limits<UINT>::max() / 4u) {
-        std::wstringstream ss;
-        ss << L"GetSize failed or returned invalid dimensions: 0x"
-           << std::hex << hr;
-        return fail(ss.str());
-    }
-
-    const UINT stride = width * 4u;
-    const uint64_t byteCount = static_cast<uint64_t>(stride) * height;
-    if (byteCount == 0 || byteCount > std::numeric_limits<UINT>::max() ||
-        byteCount > std::numeric_limits<size_t>::max()) {
-        return fail(L"image dimensions exceed the WIC pixel-buffer limit");
-    }
-
-    std::vector<uint8_t> pixels;
-    try {
-        pixels.resize(static_cast<size_t>(byteCount));
-    } catch (...) {
-        return fail(L"pixel cache allocation failed");
-    }
-
-    hr = converter->CopyPixels(nullptr, stride, static_cast<UINT>(byteCount),
-                               pixels.data());
-    if (FAILED(hr)) {
-        std::wstringstream ss;
-        ss << L"CopyPixels failed: 0x" << std::hex << hr;
-        return fail(ss.str());
-    }
-
-    m_noSignalPixels = std::move(pixels);
+    const auto width = image.width;
+    const auto height = image.height;
+    m_noSignalPixels = std::move(image.pixels);
     m_noSignalImageWidth = width;
     m_noSignalImageHeight = height;
-    m_noSignalImageStride = stride;
+    m_noSignalImageStride = image.stride;
     m_noSignalLastAttemptPath = imagePath;
     m_noSignalLastAttemptFailed = false;
     OvLog(L"Custom No Signal image loaded: " + std::to_wstring(width) +
           L"x" + std::to_wstring(height));
 
     if (!CreateNoSignalBitmap()) {
+        m_noSignalImageError = ImageLoadError::OutOfMemory;
         OvLog(L"Custom No Signal image decoded, but bitmap creation failed; "
               L"using branded fallback");
         return false;
@@ -429,6 +376,7 @@ bool Overlay::CreateNoSignalBitmap()
         return false;
     }
 
+    m_noSignalImageError = ImageLoadError::None;
     OvLog(L"Custom No Signal bitmap created: " +
           std::to_wstring(m_noSignalImageWidth) + L"x" +
           std::to_wstring(m_noSignalImageHeight));
@@ -1091,7 +1039,7 @@ void Overlay::DrawNoSignal(uint32_t windowW, uint32_t windowH)
             cardX + ipx + S(88.0f), brandY + S(5.0f),
             cardX + ipx + S(180.0f), brandY + S(22.0f));
         fBrandTag->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-        const wchar_t* tag = L"v1.2.2";
+        const wchar_t* tag = L"v1.2.3";
         m_d2dContext->DrawText(tag, (UINT32)wcslen(tag),
             fBrandTag.Get(), rTag, bFgMuted.Get());
     }

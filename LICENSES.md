@@ -13,6 +13,23 @@ acknowledged separately in [`ACKNOWLEDGMENTS.md`](ACKNOWLEDGMENTS.md).
 
 ---
 
+## Archivo
+
+- **Location:** `assets/menu/Archivo-400.ttf`, `Archivo-500.ttf`, `Archivo-600.ttf`
+- **Source:** https://fonts.google.com/specimen/Archivo
+- **Copyright:** 2020 The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo)
+- **License:** SIL Open Font License 1.1, preserved at `assets/menu/Archivo-OFL.txt`
+- **Used for:** Settings menu typography. The unmodified Google Fonts assets are bundled for offline loading.
+
+## Ko-fi brand icon
+
+- **Location:** `assets/menu/kofi-cup.png`
+- **Source:** https://storage.ko-fi.com/cdn/cup-border.png
+- **Used for:** The existing Ko-fi support link. This is a Ko-fi brand asset, not covered by NitLink's MIT license.
+- **Brand usage guidance:** https://help.ko-fi.com/hc/en-us/articles/360007169493-Can-I-use-the-Ko-fi-logo-to-promote-my-page
+
+---
+
 ## NVIDIA Image Scaling SDK (NIS)
 
 - **Location:** `third_party/nis/`

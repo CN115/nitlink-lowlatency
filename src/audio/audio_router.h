@@ -70,6 +70,7 @@ public:
     uint64_t Slips()      const { return m_slipCount.load(); }
 
 private:
+    friend struct AudioRouterTestAccess;
     class EndpointNotifier;
 
     bool FindCaptureDevice(const std::wstring& nameHint, ComPtr<IMMDevice>& outDevice);
@@ -92,7 +93,7 @@ private:
     // stream error was handed to HandleStreamError.
     bool DrainCapture();
     bool FillRender();
-    void FifoReset(UINT32 bytesPerFrame, UINT32 samplesPerSec);
+    bool FifoReset(UINT32 bytesPerFrame, UINT32 samplesPerSec);
     void FifoPush(const BYTE* data, UINT32 frames, bool silent);
     UINT32 FifoPop(BYTE* out, UINT32 frames);
     void FifoSkip(UINT32 frames);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "no_signal_image.h"
 #include <d3d11.h>
 #include <d2d1_1.h>
 #include <dwrite.h>
@@ -56,6 +57,8 @@ public:
                              const std::string& fit,
                              bool dimImage,
                              bool forceReload = false);
+    ImageLoadError GetNoSignalImageError() const { return m_noSignalImageError; }
+    bool HasNoSignalImage() const { return m_noSignalBitmap != nullptr; }
     void Shutdown();
 
     // Call BEFORE the renderer resizes the swap chain -- releases the D2D bitmap
@@ -112,6 +115,7 @@ public:
     ID3D11ShaderResourceView* GetOffscreenSRV() const { return m_offscreenSRV.Get(); }
 
 private:
+    ImageLoadError m_noSignalImageError = ImageLoadError::None;
     bool CreateD2DResources();
     bool CreateBrandGeometry();
     void DrawBrandMark(const D2D1_RECT_F& bounds, ID2D1Brush* brush);

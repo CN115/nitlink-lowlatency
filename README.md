@@ -177,7 +177,7 @@ The executable is not code-signed yet, so Windows SmartScreen warns on the first
 
 - Windows 10 (1809+) or Windows 11
 - DirectX 11 capable GPU
-- Microsoft Edge WebView2 runtime (preinstalled on Windows 11)
+- Current Microsoft Edge WebView2 Evergreen runtime (preinstalled on Windows 11). An outdated WebView2 runtime with updates blocked may lack required security interfaces; NitLink reports this and keeps the capture picture visible.
 - For HDR: an HDR-capable display + HDR enabled in Windows display settings
 - For VRR / the tear-free latency win: a VRR-capable display (G-Sync / FreeSync / HDMI 2.1 VRR) with VRR enabled at the OS and display level
 - A supported capture card (see [Hardware support](#hardware-support))
@@ -223,7 +223,7 @@ cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-Output at `out/build/x64-Release/NitLink.exe` (VS) or `build/Release/NitLink.exe` (CLI). The build copies `nitlink-menu.html`, `locales/en-US.js`, `locales/zh-TW.js` and `third_party/nis/NIS_Scaler.h` beside the `.exe`, preserving their subfolders (all are needed at runtime).
+Output at `out/build/x64-Release/NitLink.exe` (VS) or `build/Release/NitLink.exe` (CLI). The build copies `nitlink-menu.html`, `locales/en-US.js`, `locales/zh-TW.js`, the complete `assets/menu` folder and `third_party/nis/NIS_Scaler.h` beside the `.exe`, preserving their subfolders (all are needed at runtime).
 
 ---
 
@@ -266,7 +266,7 @@ On the 4K Pro / 4K X, HDR auto-follows the source. On the 4K S, source HDR state
 
 ## Configuration
 
-Settings live in `nitlink.json` next to the executable. Plain text; auto-saves on every toggle. Keys of interest:
+Settings live in `nitlink.json` in the working directory (normally next to the executable; a shortcut can set a different Start in folder). Plain text; auto-saves on every toggle. If loading fails, saves stop to protect the original file; F1 shows the warning and names a recovery backup when one could be created. Identical rejected content reuses a backup; up to two copies of at most 1 MiB are kept as `.bak` and `.bak.1`. Larger rejected files remain untouched without being copied. Correct or rename the file and restart to resume saving. An unwritable folder or file also produces a warning. A leftover `.save-recovery` copy does not prevent loading or normal saves; the warning gives its full path. Identical copies are deleted silently, and a successful save is not treated as failed if cleanup is temporarily blocked. If both an in-place write and restoration fail, further saves stop for that session and the warning explains how to recover the file. Config warnings appear as timed toasts and stay available in F1; they are omitted from NitLink screenshots. Numeric values accept a leading number followed by text (for example, `117 Hz` or `1920.0`), while finite-value and range checks still apply. Keys of interest:
 
 - `vsync`: synchronize presentation (default `false`). Toggle with `Alt+V` or F1; the setting survives restart and graphics-device recovery. VSync bypasses the tearing-mode present cap, including `VRR_CAP.txt`, and may add input delay. Driver overrides still apply.
 - `low_latency`: low-latency present mode (default `true`). `true` = present-on-arrival (lowest input lag). `false` = the frame is held after capture and the swap-chain wait moves before present, so the picture is up to one refresh older. VSync controls tearing separately; `false` can add input lag. Toggle with `Alt+L` or the F1 panel.
@@ -276,7 +276,7 @@ Settings live in `nitlink.json` next to the executable. Plain text; auto-saves o
 - `present_cap_hz`: present-rate cap in Hz for the low-latency present (default `0` = automatic: monitor refresh minus 3, applied when that is at least the source frame rate). `30` to `1000` = fixed cap, `-1` = off. Bypassed while VSync is enabled.
 
 - `aspect_ratio`: `auto` (default, the ratio the card reports), `stretch` (fill the window), or a fixed ratio such as `4:3`, `16:9`, `16:10`, `21:9`. Restores 4:3 sources that a card delivers stretched inside a 16:9 frame. Cycle with `Alt+A` or from the F1 panel.
-- `no_signal_mode`: `default` (NitLink's branded page) or `image`. With `image`, choose a local PNG, JPEG/JPG, or BMP from the F1 **No Signal** section. `no_signal_image` is stored as UTF-8; `no_signal_fit` accepts `contain`, `cover`, or `stretch`, and `no_signal_dim_image` controls the optional 40% black dim layer (`true` by default). The image keeps its intrinsic aspect ratio, remains independent of the normal capture `aspect_ratio`, and is decoded into a cache instead of being read from disk every frame.
+- `no_signal_mode`: `default` (NitLink's branded page) or `image`. With `image`, choose a local PNG, JPEG/JPG, or BMP from the F1 **No Signal** section. `no_signal_image` is stored as UTF-8; `no_signal_fit` accepts `contain`, `cover`, or `stretch`, and `no_signal_dim_image` controls the optional 40% black dim layer (`true` by default). The image keeps its intrinsic aspect ratio, remains independent of the normal capture `aspect_ratio`, and is decoded into a cache instead of being read from disk every frame. Custom No Signal images must be on a local drive; UNC shares and mapped network drives are unsupported. Large photos are scaled to a bounded pixel buffer. Files above 512 MiB or 16384 pixels per side produce a visible size warning. GIF, WebP, TIFF, and HEIC are unsupported. With no image selected, the branded screen stays visible.
 - `panel_side`: `right` (default), `left`, or `full`. Right and left open the F1 panel as a strip beside the picture, which keeps playing underneath. Full covers the window with the wide layout. `panel_width` is the docked width in device-independent pixels (default `420`). Cycle the position from the panel's Video tab.
 - `nis_enabled` / `nis_sharpness` / `nis_scale_mode`: NIS upscaler config.
 - `color_expansion`: limited-to-full SDR RGB range expansion (default off). The control appears under F1 > Video > Advanced only for RGB capture with SDR output and limited source range. HDR output, full-range input, NV12 and P010 bypass this setting; the saved preference is retained.

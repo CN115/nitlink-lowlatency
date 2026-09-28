@@ -1,3 +1,4 @@
+#include "../common/input_limits.h"
 #include "capture_device.h"
 #include "dshow_capture.h"
 #include "p010_format_selector.h"
@@ -577,11 +578,23 @@ bool CaptureDevice::Open(const DeviceInfo& device)
 
     // Verify what was actually negotiated
     ComPtr<IMFMediaType> actualType;
-    if (SUCCEEDED(m_reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, &actualType))) {
-        GUID subtype;
-        actualType->GetGUID(MF_MT_SUBTYPE, &subtype);
-        UINT32 w, h;
-        MFGetAttributeSize(actualType.Get(), MF_MT_FRAME_SIZE, &w, &h);
+    if (FAILED(m_reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, &actualType)) || !actualType)
+        return false;
+    {
+        GUID subtype{};
+        UINT32 w = 0, h = 0, rowBytes = 0, frameBytes = 0;
+        if (FAILED(actualType->GetGUID(MF_MT_SUBTYPE, &subtype)) ||
+            FAILED(MFGetAttributeSize(actualType.Get(), MF_MT_FRAME_SIZE, &w, &h))) return false;
+        PixelLayout layout;
+        if (subtype == MFVideoFormat_NV12) layout = PixelLayout::Nv12;
+        else if (subtype == MFVideoFormat_P010) layout = PixelLayout::P010;
+        else if (subtype == MFVideoFormat_RGB32 || subtype == MFVideoFormat_ARGB32) layout = PixelLayout::Bgra;
+        else return false;
+        if (!FrameLayout(w, h, layout, rowBytes, frameBytes) || !FrameCapacity(w, h, rowBytes)) {
+            DebugLog(L"Negotiated frame dimensions exceed supported memory limits");
+            return false;
+        }
+        m_format.stride = rowBytes;
 
         // CRITICAL: write back the ACTUAL negotiated dimensions to m_format.
         // The original request used whatever `m_format` had (e.g. 4K), but the
@@ -1101,7 +1114,7 @@ bool CaptureDevice::LogAvailableFormats()
     }
 
     DWORD streamCount = 0;
-    pd->GetStreamDescriptorCount(&streamCount);
+    if (FAILED(pd->GetStreamDescriptorCount(&streamCount)) || streamCount > 64) return false;
 
     auto Log = [](const std::wstring& msg) {
         OutputDebugStringW((L"[NitLink/Formats] " + msg + L"\n").c_str());
@@ -1117,19 +1130,19 @@ bool CaptureDevice::LogAvailableFormats()
     for (DWORD si = 0; si < streamCount; si++) {
         BOOL selected = FALSE;
         ComPtr<IMFStreamDescriptor> sd;
-        pd->GetStreamDescriptorByIndex(si, &selected, &sd);
+        if (FAILED(pd->GetStreamDescriptorByIndex(si, &selected, &sd)) || !sd) continue;
         if (!selected) continue;
 
         ComPtr<IMFMediaTypeHandler> handler;
-        sd->GetMediaTypeHandler(&handler);
+        if (FAILED(sd->GetMediaTypeHandler(&handler)) || !handler) continue;
 
         // Verify this is a video stream (skip audio if any)
         GUID major{};
-        handler->GetMajorType(&major);
+        if (FAILED(handler->GetMajorType(&major))) continue;
         if (!IsEqualGUID(major, MFMediaType_Video)) continue;
 
         DWORD typeCount = 0;
-        handler->GetMediaTypeCount(&typeCount);
+        if (FAILED(handler->GetMediaTypeCount(&typeCount)) || typeCount > 4096) continue;
         {
             std::wstringstream ss;
             ss << L"Stream " << si << L" has " << typeCount << L" media types:";
@@ -1138,7 +1151,7 @@ bool CaptureDevice::LogAvailableFormats()
 
         for (DWORD t = 0; t < typeCount; t++) {
             ComPtr<IMFMediaType> type;
-            handler->GetMediaTypeByIndex(t, &type);
+            if (FAILED(handler->GetMediaTypeByIndex(t, &type)) || !type) continue;
 
             GUID subtype{};
             type->GetGUID(MF_MT_SUBTYPE, &subtype);
@@ -1454,6 +1467,10 @@ void CaptureDevice::CaptureLoop()
         DWORD maxLen = 0, currentLen = 0;
         hr = buffer->Lock(&rawData, &maxLen, &currentLen);
         if (SUCCEEDED(hr)) {
+            if (!rawData || !currentLen || currentLen > maxLen || currentLen > kMaxFrameBytes) {
+                if (FAILED(buffer->Unlock())) DebugLog(L"Media buffer unlock failed");
+                continue;
+            }
             if (!loggedFirstFrame) {
                 const CaptureFormat fmt = GetOutputFormat();
                 std::wstringstream ss;
@@ -1496,7 +1513,7 @@ void CaptureDevice::CaptureLoop()
                     std::chrono::steady_clock::now().time_since_epoch()).count();
                 cb(rawData, currentLen, timestamp, arrivalWallNs, deviceTs);
             }
-            buffer->Unlock();
+            if (FAILED(buffer->Unlock())) DebugLog(L"Media buffer unlock failed");
         }
     }
     m_capturing = false;

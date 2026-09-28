@@ -1,3 +1,5 @@
+#include "pipe_transport.h"
+#include <algorithm>
 #include "discord_rpc.h"
 #include <debugapi.h>
 #include <sstream>
@@ -11,19 +13,21 @@ static void RPCLog(const std::wstring& msg) {
     OutputDebugStringW((L"[NitLink/Discord] " + msg + L"\n").c_str());
 }
 
-DiscordRPC::DiscordRPC() = default;
+DiscordRPC::DiscordRPC() : m_stopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
 
 DiscordRPC::~DiscordRPC()
 {
     Disconnect();
+    if (m_stopEvent) CloseHandle(m_stopEvent);
 }
 
 std::string DiscordRPC::WideToUtf8(const std::wstring& w)
 {
-    if (w.empty()) return {};
-    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    if (w.empty() || w.size() > 1024) return {};
+    int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
     std::string s(n, 0);
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), s.data(), n, nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w.data(), (int)w.size(), s.data(), n, nullptr, nullptr);
     return s;
 }
 
@@ -55,119 +59,56 @@ std::string DiscordRPC::EscapeJson(const std::string& s)
 
 bool DiscordRPC::Connect(const std::string& applicationId)
 {
-    if (applicationId.empty()) {
-        RPCLog(L"Connect: empty application ID, RPC disabled");
+    Disconnect();
+    if (!m_stopEvent || !ResetEvent(m_stopEvent) || applicationId.empty() || applicationId.size() > 32 ||
+        !std::all_of(applicationId.begin(), applicationId.end(), [](char c) { return c >= '0' && c <= '9'; }))
         return false;
-    }
 
     m_applicationId = applicationId;
 
-    // Discord may have multiple pipes if multiple clients are running.
-    // Try 0..9 and use the first one that connects.
-    for (int i = 0; i < 10; i++) {
-        wchar_t pipeName[64];
-        swprintf(pipeName, 64, L"\\\\.\\pipe\\discord-ipc-%d", i);
-        HANDLE h = CreateFileW(pipeName, GENERIC_READ | GENERIC_WRITE,
-                               0, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (h != INVALID_HANDLE_VALUE) {
-            m_pipe = h;
-            break;
-        }
-    }
-
-    if (m_pipe == INVALID_HANDLE_VALUE) {
-        RPCLog(L"Connect: no Discord client found (is Discord running?)");
-        return false;
-    }
-
-    // Send HANDSHAKE: {"v": 1, "client_id": "..."}
-    std::string handshake = "{\"v\":1,\"client_id\":\"" +
-                             EscapeJson(m_applicationId) + "\"}";
-    if (!SendFrame(Opcode::Handshake, handshake)) {
-        RPCLog(L"Connect: handshake send failed");
-        CloseHandle(m_pipe);
-        m_pipe = INVALID_HANDLE_VALUE;
-        return false;
-    }
-
-    // Read the READY frame back. The payload is not parsed; Discord just
-    // needs the pipe drained so it doesn't back up.
-    //
-    // Deadline guard: ReadFile on the Discord IPC pipe is blocking with no
-    // timeout, so if Discord opens the pipe but never replies to the
-    // handshake (recent Discord builds rate-limit / silently drop RPC
-    // handshakes from unverified app IDs), Initialize hangs forever and
-    // the user sees the main window stuck on its background colour with no
-    // capture ever starting. PeekNamedPipe allows waiting for at least the
-    // 8-byte frame header to arrive within a short window; if it doesn't,
-    // Discord is treated as unavailable and startup continues. Discord
-    // normally replies in well under 100 ms, so a 1.5 s deadline is generous.
-    {
-        using clock = std::chrono::steady_clock;
-        const auto deadline = clock::now() + std::chrono::milliseconds(1500);
-        DWORD bytesAvailable = 0;
-        bool  ready          = false;
-        while (clock::now() < deadline) {
-            if (!PeekNamedPipe(m_pipe, nullptr, 0, nullptr,
-                                &bytesAvailable, nullptr)) {
-                RPCLog(L"Connect: PeekNamedPipe failed during handshake wait");
-                CloseHandle(m_pipe);
-                m_pipe = INVALID_HANDLE_VALUE;
-                return false;
-            }
-            if (bytesAvailable >= sizeof(uint32_t) * 2) {
-                ready = true;
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        if (!ready) {
-            RPCLog(L"Connect: handshake reply timeout (Discord not responding, RPC disabled for session)");
-            CloseHandle(m_pipe);
-            m_pipe = INVALID_HANDLE_VALUE;
-            return false;
-        }
-    }
-    Opcode op; std::string payload;
-    // ReadFrame's cancellation guard also covers the handshake, before the
-    // worker thread exists. A failed handshake must end this session again.
+    if (!OpenConnection()) return false;
     m_running = true;
-    if (!ReadFrame(op, payload)) {
-        m_running = false;
-        RPCLog(L"Connect: handshake reply read failed");
+    m_worker = std::thread(&DiscordRPC::WorkerLoop, this);
+    return true;
+}
+
+bool DiscordRPC::OpenConnection()
+{
+    m_connected = false;
+    if (m_pipe != INVALID_HANDLE_VALUE) CloseHandle(m_pipe);
+    m_pipe = INVALID_HANDLE_VALUE;
+    if (WaitForSingleObject(m_stopEvent, 0) != WAIT_TIMEOUT) return false;
+    if (m_pipeOpener) {
+        m_pipe = m_pipeOpener();
+    } else {
+        for (int i = 0; i < 10; ++i) {
+            wchar_t name[64];
+            swprintf(name, 64, L"\\\\.\\pipe\\discord-ipc-%d", i);
+            m_pipe = OpenRpcPipe(name);
+            if (m_pipe != INVALID_HANDLE_VALUE) break;
+        }
+    }
+    if (m_pipe == INVALID_HANDLE_VALUE) return false;
+    const std::string handshake = "{\"v\":1,\"client_id\":\"" +
+        EscapeJson(m_applicationId) + "\"}";
+    Opcode op{};
+    std::string payload;
+    if (!SendFrame(Opcode::Handshake, handshake) || !ReadFrame(op, payload) || op != Opcode::Frame) {
         CloseHandle(m_pipe);
         m_pipe = INVALID_HANDLE_VALUE;
+        RPCLog(L"Handshake failed; connection closed");
         return false;
     }
-
     m_connected = true;
-    m_worker    = std::thread(&DiscordRPC::WorkerLoop, this);
     RPCLog(L"Connect: success");
     return true;
 }
 
 void DiscordRPC::Disconnect()
 {
-    if (!m_running.exchange(false)) return;
-
-    if (m_worker.joinable()) {
-        // Kick the worker out of any parked synchronous pipe I/O before
-        // joining. The worker issues blocking WriteFile (SendFrame) and
-        // ReadFile (ReadFrame) calls; if Discord is alive but not draining the
-        // pipe, one of those can block in the kernel indefinitely, and clearing
-        // m_running alone cannot wake it, so join() would hang app exit.
-        // CancelSynchronousIo targets the worker thread's in-flight call.
-        // ERROR_NOT_FOUND (no call was pending) is expected and ignored. The
-        // spaced retries cover the race where the worker has decided to issue
-        // the call but has not yet entered the kernel when the first cancel
-        // fires; the unconditional join afterward reaps the thread either way.
-        const HANDLE workerHandle = m_worker.native_handle();
-        for (int i = 0; i < 3; i++) {
-            CancelSynchronousIo(workerHandle);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        m_worker.join();
-    }
+    m_running = false;
+    if (m_stopEvent) SetEvent(m_stopEvent);
+    if (m_worker.joinable()) m_worker.join();
 
     if (m_pipe != INVALID_HANDLE_VALUE) {
         CloseHandle(m_pipe);
@@ -179,56 +120,15 @@ void DiscordRPC::Disconnect()
 
 bool DiscordRPC::SendFrame(Opcode op, const std::string& payload)
 {
-    if (m_pipe == INVALID_HANDLE_VALUE) return false;
-
-    // Frame format: [opcode: u32 LE][length: u32 LE][payload bytes]
-    uint32_t opc = (uint32_t)op;
-    uint32_t len = (uint32_t)payload.size();
-    DWORD written = 0;
-
-    if (!WriteFile(m_pipe, &opc, sizeof(opc), &written, nullptr) || written != sizeof(opc)) return false;
-    if (!WriteFile(m_pipe, &len, sizeof(len), &written, nullptr) || written != sizeof(len)) return false;
-    if (len > 0) {
-        if (!WriteFile(m_pipe, payload.data(), len, &written, nullptr) || written != len) return false;
-    }
-    return true;
+    return WriteRpcFrame(m_pipe, m_stopEvent, static_cast<uint32_t>(op), payload);
 }
 
 bool DiscordRPC::ReadFrame(Opcode& op, std::string& payload)
 {
-    if (m_pipe == INVALID_HANDLE_VALUE) return false;
-
-    uint32_t opc = 0, len = 0;
-    DWORD got = 0;
-    if (!ReadFile(m_pipe, &opc, sizeof(opc), &got, nullptr) || got != sizeof(opc)) return false;
-    if (!ReadFile(m_pipe, &len, sizeof(len), &got, nullptr) || got != sizeof(len)) return false;
-
-    op = (Opcode)opc;
-
-    // Cap the frame length before resize(). len is an untrusted u32 straight
-    // off the pipe; a corrupt or hostile frame could claim up to 4 GiB and
-    // turn resize() into an OOM crash. Discord RPC frames are small JSON blobs
-    // (the reference library caps the whole frame at 64 KiB), so anything
-    // larger is malformed and the read is dropped.
-    static constexpr uint32_t kMaxFrameLen = 64 * 1024;
-    if (len > kMaxFrameLen) {
-        RPCLog(L"ReadFrame: frame length exceeds cap, dropping");
-        return false;
-    }
-
-    payload.resize(len);
-    if (len > 0) {
-        // Gate the payload ReadFile the same way the header read is gated.
-        // WaitForReadableFrame before this call only guaranteed the 8 header
-        // bytes; a header-only partial frame (Discord wrote the header then
-        // stalled, or is shutting down) would otherwise park the worker in a
-        // blocking kernel read on the missing payload, which m_running alone
-        // cannot wake and which would hang Disconnect's join(). Wait for the
-        // full payload to be peekable first; bail on timeout or a dropped pipe.
-        if (!WaitForReadableFrame(std::chrono::milliseconds(2000), len)) return false;
-        if (!ReadFile(m_pipe, payload.data(), len, &got, nullptr) || got != len) return false;
-    }
-    return true;
+    uint32_t opcode = 0;
+    if (!ReadRpcFrame(m_pipe, m_stopEvent, opcode, payload)) return false;
+    op = static_cast<Opcode>(opcode);
+    return op != Opcode::Close;
 }
 
 void DiscordRPC::SetActivity(const std::wstring& details,
@@ -237,6 +137,8 @@ void DiscordRPC::SetActivity(const std::wstring& details,
                               const std::string& largeImageKey,
                               const std::wstring& largeImageText)
 {
+    if (details.size() > 1024 || state.size() > 1024 || largeImageText.size() > 1024 || largeImageKey.size() > 1024)
+        return;
     std::lock_guard<std::mutex> lock(m_activityMutex);
     m_pendingDetails        = details;
     m_pendingState          = state;
@@ -255,36 +157,57 @@ void DiscordRPC::ClearActivity()
     m_activityDirty  = false;
 }
 
-bool DiscordRPC::WaitForReadableFrame(std::chrono::milliseconds timeout,
-                                      DWORD requiredBytes)
-{
-    if (m_pipe == INVALID_HANDLE_VALUE) return false;
-
-    using clock = std::chrono::steady_clock;
-    const auto deadline = clock::now() + timeout;
-    while (m_running && clock::now() < deadline) {
-        DWORD bytesAvailable = 0;
-        if (!PeekNamedPipe(m_pipe, nullptr, 0, nullptr, &bytesAvailable, nullptr)) {
-            // Pipe closed by Discord or a peek error: report not-readable so the
-            // caller skips the read instead of blocking on a dead pipe.
-            return false;
-        }
-        if (bytesAvailable >= requiredBytes) return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    return false;
-}
-
 void DiscordRPC::WorkerLoop()
 {
-    // Activity updates are rate-limited to once every 2 seconds (Discord has its
-    // own rate limit at 5 updates per 20 seconds; staying well under it).
+    // Replies are drained independently of the two-second activity send limit.
     auto lastSend = std::chrono::steady_clock::now() - std::chrono::seconds(10);
-    static int nonce = 1000;
+    uint64_t nonce = 1000;
+    RpcFrameReader reader;
+    DWORD reconnectDelay = 2000;
+    auto nextReconnect = std::chrono::steady_clock::now();
+    auto connectedSince = nextReconnect;
+    bool sentActivity = false, lastWasClear = false;
+    const auto disconnected = [&](const wchar_t* reason) {
+        if (WaitForSingleObject(m_stopEvent, 0) != WAIT_TIMEOUT) return;
+        RPCLog(std::wstring(reason) + L"; retry in " + std::to_wstring(reconnectDelay / 1000) + L" seconds");
+        m_connected = false;
+        if (m_pipe != INVALID_HANDLE_VALUE) CloseHandle(m_pipe);
+        m_pipe = INVALID_HANDLE_VALUE;
+        reader.Reset();
+        nextReconnect = std::chrono::steady_clock::now() + std::chrono::milliseconds(reconnectDelay);
+        reconnectDelay = std::min<DWORD>(reconnectDelay * 2, 30000);
+        std::lock_guard<std::mutex> lock(m_activityMutex);
+        if (sentActivity && !m_activityDirty && !m_clearRequested) {
+            m_clearRequested = lastWasClear;
+            m_activityDirty = !lastWasClear;
+        }
+    };
 
     while (m_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (WaitForSingleObject(m_stopEvent, 500) != WAIT_TIMEOUT) break;
         auto now = std::chrono::steady_clock::now();
+        if (!m_connected) {
+            if (now < nextReconnect) continue;
+            if (!OpenConnection()) { disconnected(L"Discord reconnect unavailable"); continue; }
+            reader.Reset();
+            connectedSince = std::chrono::steady_clock::now();
+        }
+        // A slow or absent reply retains presence. Only complete frames are
+        // interpreted, with at most four bounded frames drained per pass.
+        for (unsigned count = 0; count < 4; ++count) {
+            uint32_t opcode = 0;
+            std::string payload;
+            const auto result = reader.Poll(m_pipe, m_stopEvent, opcode, payload);
+            if (result == RpcReadResult::Pending) break;
+            if (result == RpcReadResult::Failed || opcode == static_cast<uint32_t>(Opcode::Close) ||
+                (opcode == static_cast<uint32_t>(Opcode::Ping) && !SendFrame(Opcode::Pong, payload))) {
+                disconnected(L"Discord stream closed or invalid");
+                break;
+            }
+        }
+        if (!m_connected) continue;
+        now = std::chrono::steady_clock::now();
+        if (now - connectedSince >= std::chrono::seconds(60)) reconnectDelay = 2000;
         if (now - lastSend < std::chrono::seconds(2)) continue;
 
         std::wstring details, state, largeText;
@@ -328,25 +251,13 @@ void DiscordRPC::WorkerLoop()
             cmd << "}}}";
         }
 
-        if (!SendFrame(Opcode::Frame, cmd.str())) {
-            RPCLog(L"WorkerLoop: SendFrame failed; disconnecting");
-            m_connected = false;
-            break;
-        }
-        // Drain the response (don't bother parsing it).
-        //
-        // Gate the header read on PeekNamedPipe (and ReadFrame gates its own
-        // payload read the same way) so a silent or unresponsive Discord cannot
-        // park the worker in a kernel read: Disconnect sets m_running=false and
-        // the wait returns within one poll interval, so join() completes instead
-        // of hanging app exit. A reply that never arrives times out and the loop
-        // continues, so one dropped response does not stall later updates.
-        Opcode op; std::string payload;
-        if (WaitForReadableFrame(std::chrono::milliseconds(2000), sizeof(uint32_t) * 2)) {
-            ReadFrame(op, payload);
-        }
-        lastSend = now;
+        sentActivity = true;
+        lastWasClear = doClear;
+        if (!SendFrame(Opcode::Frame, cmd.str())) disconnected(L"Discord activity write failed");
+        lastSend = std::chrono::steady_clock::now();
     }
+    m_connected = false;
+    m_running = false;
 }
 
 } // namespace NitLink

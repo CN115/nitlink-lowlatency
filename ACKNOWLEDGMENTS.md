@@ -39,7 +39,7 @@ Code contributions merged into NitLink:
   on its worker thread, and plays through playback devices whose sample
   rate or channel layout differs from the capture card's.
 
-- HolyBear (聖小熊), [@HolyBearTW](https://github.com/HolyBearTW), NitLink 1.2.2:
+- HolyBear (聖小熊), [@HolyBearTW](https://github.com/HolyBearTW), NitLink 1.2.2 and 1.2.3:
   HDR-to-SDR tone mapping, Traditional Chinese localization, GC553Pro
   capture and automatic HDR source detection, native fractional frame rates,
   startup and placeholder handling, custom No Signal images, settings
@@ -50,7 +50,8 @@ Code contributions merged into NitLink:
   [#14](https://github.com/nitlink-dev/nitlink/pull/14),
   [#16](https://github.com/nitlink-dev/nitlink/pull/16),
   [#19](https://github.com/nitlink-dev/nitlink/pull/19),
-  [#20](https://github.com/nitlink-dev/nitlink/pull/20)).
+  [#20](https://github.com/nitlink-dev/nitlink/pull/20),
+  [#21](https://github.com/nitlink-dev/nitlink/pull/21)).
 
 ---
 

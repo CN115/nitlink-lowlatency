@@ -78,6 +78,7 @@ public:
     // wouldn't get consumed until the drag ended, leaving the popup
     // stranded mid-drag.
     void SetMoveCallback(std::function<void()> cb) { m_onMove = std::move(cb); }
+    void SetCloseCallback(std::function<void()> cb) { m_onClose = std::move(cb); }
 
     HWND GetHWND() const { return m_hwnd; }
     std::pair<uint32_t, uint32_t> GetClientSize() const;
@@ -133,6 +134,7 @@ private:
     int32_t  m_pipPreferredY = -1;
 
     InputCallbacks m_inputCb;
+    std::function<void()> m_onClose;
     std::function<void()> m_onMove;
     std::function<void()> m_onPiPResize;
 };

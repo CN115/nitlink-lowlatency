@@ -2,6 +2,11 @@
 #include <fstream>
 #include <filesystem>
 #include <sstream>
+#include <cmath>
+#include <windows.h>
+#include <algorithm>
+#include <memory>
+#include <atomic>
 
 // Minimal key=value parser. NOT real JSON despite the .json file extension:
 // the format is flat "key = value" lines with one extension: dotted keys
@@ -35,11 +40,15 @@ static bool ParseBool(const std::string& v) {
     return v == "true" || v == "1" || v == "yes" || v == "on";
 }
 
-// Safe numeric parsers: the config is hand-editable, so malformed or
-// out-of-range values must fall back to `def` and clamp to [lo,hi] instead
-// of throwing (std::sto*) or feeding a bogus size into allocation. Note
-// std::stoul wraps a leading '-' instead of throwing, so reject it explicitly.
-static uint32_t ParseU32(const std::string& v, uint32_t def, uint32_t lo, uint32_t hi) {
+// Hand-edited numeric values accept a leading number and ignore trailing text.
+// Invalid/non-finite values retain the default; valid numbers clamp to [lo,hi].
+// Unsigned fields reject a leading '-' rather than accepting stoul's wraparound.
+static std::string NumericText(const std::string& value) {
+    return Trim(value.substr(0, value.find('#')));
+}
+
+static uint32_t ParseU32(const std::string& value, uint32_t def, uint32_t lo, uint32_t hi) {
+    const auto v = NumericText(value);
     try {
         if (!v.empty() && v[0] == '-') return def;
         unsigned long n = std::stoul(v);
@@ -49,7 +58,8 @@ static uint32_t ParseU32(const std::string& v, uint32_t def, uint32_t lo, uint32
     } catch (...) { return def; }
 }
 
-static int ParseI32(const std::string& v, int def, int lo, int hi) {
+static int ParseI32(const std::string& value, int def, int lo, int hi) {
+    const auto v = NumericText(value);
     try {
         int n = std::stoi(v);
         if (n < lo) return lo;
@@ -58,25 +68,253 @@ static int ParseI32(const std::string& v, int def, int lo, int hi) {
     } catch (...) { return def; }
 }
 
-static float ParseFloatClamped(const std::string& v, float def, float lo, float hi) {
+static float ParseFloatClamped(const std::string& value, float def, float lo, float hi) {
+    const auto v = NumericText(value);
     try {
         float n = std::stof(v);
+        if (!std::isfinite(n)) return def;
         if (n < lo) return lo;
         if (n > hi) return hi;
         return n;
     } catch (...) { return def; }
 }
 
-bool Config::Load(const std::string& path)
-{
-    if (!std::filesystem::exists(path)) {
-        // First run -- create default config
-        Save(path);
+namespace {
+constexpr size_t kMaxConfigBytes = 1024 * 1024;
+constexpr size_t kMaxConfigLine = 128 * 1024;
+
+std::wstring UniqueFileSuffix() {
+    static std::atomic<unsigned> sequence{0};
+    return std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()) +
+        L"-" + std::to_wstring(++sequence);
+}
+
+void RemoveStaleConfigTemps(const std::filesystem::path& target) {
+    std::error_code ec;
+    const auto directory = target.has_parent_path() ? target.parent_path() : std::filesystem::path(".");
+    const auto prefix = target.filename().wstring() + L".tmp-";
+    for (std::filesystem::directory_iterator it(directory, ec), end; !ec && it != end; it.increment(ec)) {
+        const auto name = it->path().filename().wstring();
+        if (!name.starts_with(prefix)) continue;
+        auto suffix = name.substr(prefix.size());
+        if (suffix.ends_with(L".bak")) suffix.resize(suffix.size() - 4);
+        const auto dash = suffix.find(L'-');
+        if (dash == std::wstring::npos || dash == 0 ||
+            suffix.find_first_not_of(L"0123456789-") != std::wstring::npos) continue;
+        DWORD pid = 0;
+        try { pid = std::stoul(suffix.substr(0, dash)); } catch (...) { continue; }
+        if (!pid || pid == GetCurrentProcessId()) continue;
+        HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        if (process) {
+            const bool active = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+            CloseHandle(process);
+            if (active) continue;
+        } else if (GetLastError() != ERROR_INVALID_PARAMETER) {
+            continue;
+        }
+        const DWORD attributes = GetFileAttributesW(it->path().c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        // DeleteFile removes the temporary entry itself, including cloud placeholders.
+        // Directories and active processes are never touched.
+        DeleteFileW(it->path().c_str());
+    }
+}
+
+bool ReadSmallConfig(const std::filesystem::path& path, std::string& contents) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) return false;
+    const auto size = input.tellg();
+    if (size < 0 || size > static_cast<std::streamoff>(kMaxConfigBytes)) return false;
+    contents.resize(static_cast<size_t>(size));
+    input.seekg(0);
+    return !size || bool(input.read(contents.data(), size));
+}
+
+std::wstring PreserveConfigBackup(const std::filesystem::path& target) {
+    // Two bounded copies replace the per-launch archive. Oversized or unreadable
+    // originals stay in place, protected by the failed-load save guard.
+    std::string contents, previous;
+    if (!ReadSmallConfig(target, contents)) return {};
+    const auto newest = target.wstring() + L".bak";
+    const auto older = newest + L".1";
+    for (const auto& backup : {newest, older})
+        if (ReadSmallConfig(backup, previous) && contents == previous) return backup;
+    const auto temporary = target.wstring() + L".tmp-" + UniqueFileSuffix() + L".bak";
+    HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
+                             CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return {};
+    DWORD written = 0;
+    const bool copied = WriteFile(file, contents.data(), static_cast<DWORD>(contents.size()), &written, nullptr) &&
+                        written == contents.size();
+    const bool closed = CloseHandle(file) != FALSE;
+    bool rotated = false;
+    if (copied && closed) {
+        rotated = MoveFileExW(newest.c_str(), older.c_str(), MOVEFILE_REPLACE_EXISTING) != FALSE;
+        if (!rotated) {
+            const auto error = GetLastError();
+            rotated = error == ERROR_FILE_NOT_FOUND;
+        }
+        if (rotated && MoveFileExW(temporary.c_str(), newest.c_str(), MOVEFILE_REPLACE_EXISTING))
+            return newest;
+    }
+    DeleteFileW(temporary.c_str());
+    return {};
+}
+
+bool IsConfigText(const std::string& value) {
+    return value.size() <= kMaxConfigLine - 128 && std::none_of(value.begin(), value.end(),
+        [](unsigned char c) { return c < 0x20 && c != '\t'; });
+}
+bool IsGameId(const std::string& id) {
+    return id.size() <= 64 && std::all_of(id.begin(), id.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+    });
+}
+std::wstring ConfigWide(const std::string& value) {
+    if (value.empty()) return {};
+    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0);
+    if (count <= 0) return {};
+    std::wstring result(count, L'\0');
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), result.data(), count)) return {};
+    return result;
+}
+std::string ConfigUtf8(const std::wstring& value) {
+    if (value.empty() || value.size() > kMaxConfigLine) return {};
+    const int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (count <= 0) return {};
+    std::string result(count, '\0');
+    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), result.data(), count, nullptr, nullptr)) return {};
+    return result;
+}
+bool IsFormat(const std::wstring& value) {
+    return value.empty() || value == L"NV12" || value == L"P010" ||
+        value == L"BGRA" || value == L"RGB32";
+}
+void DeleteRecoveryCopy(const std::wstring& recovery) {
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        if (DeleteFileW(recovery.c_str())) return;
+        const auto error = GetLastError();
+        if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION) return;
+        if (attempt < 4) Sleep(20);
+    }
+}
+
+// The fallback is used only after sharing-related rename failures. A disk file
+// with one link and no reparse point is required before any in-place write.
+bool SaveInPlace(const std::wstring& target, const std::string& contents, bool& recoveryRequired) {
+    recoveryRequired = false;
+    const auto recovery = target + L".save-recovery";
+    const HANDLE raw = CreateFileW(target.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (raw == INVALID_HANDLE_VALUE) return false;
+    const std::unique_ptr<void, decltype(&CloseHandle)> file(raw, &CloseHandle);
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileType(raw) != FILE_TYPE_DISK || !GetFileInformationByHandle(raw, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
+        info.nNumberOfLinks != 1 || info.nFileSizeHigh || info.nFileSizeLow > kMaxConfigBytes)
+        return false;
+    std::string previous(info.nFileSizeLow, '\0');
+    DWORD read = 0;
+    if (!ReadFile(raw, previous.data(), info.nFileSizeLow, &read, nullptr) || read != info.nFileSizeLow)
+        return false;
+    const HANDLE backup = CreateFileW(recovery.c_str(), GENERIC_WRITE, 0, nullptr,
+        CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (backup == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool backedUp = WriteFile(backup, previous.data(), static_cast<DWORD>(previous.size()), &written, nullptr) &&
+        written == previous.size();
+    const bool closed = CloseHandle(backup) != FALSE;
+    if (!backedUp || !closed) {
+        DeleteFileW(recovery.c_str());
+        return false;
+    }
+    const auto replace = [&](const std::string& bytes) {
+        DWORD count = 0;
+        return SetFilePointerEx(raw, {}, nullptr, FILE_BEGIN) &&
+            WriteFile(raw, bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) &&
+            count == bytes.size() && SetEndOfFile(raw);
+    };
+    if (replace(contents)) {
+        DeleteRecoveryCopy(recovery);
+        OutputDebugStringW(L"[NitLink/Config] Saved through sharing-compatible fallback.\n");
         return true;
     }
+    const bool restored = replace(previous);
+    recoveryRequired = !restored;
+    if (restored) DeleteRecoveryCopy(recovery);
+    OutputDebugStringW((L"[NitLink/Config] In-place save failed; recovery copy: " + recovery +
+        (restored ? L" (original restored)\n" : L" (restore failed)\n")).c_str());
+    return false;
+}
+} // namespace
 
-    std::ifstream file(path);
-    if (!file.is_open()) return false;
+void Config::CheckRecovery(const std::string& path) {
+    m_saveRecovery.clear();
+    const auto target = std::filesystem::path(path);
+    const auto recovery = target.wstring() + L".save-recovery";
+    if (GetFileAttributesW(recovery.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    std::string current, previous;
+    if (ReadSmallConfig(target, current) && ReadSmallConfig(recovery, previous) && current == previous) {
+        DeleteRecoveryCopy(recovery);
+        return; // An identical copy needs no user action, even if deletion is blocked.
+    }
+    std::error_code error;
+    const auto absolute = std::filesystem::absolute(recovery, error);
+    m_saveRecovery = error ? recovery : absolute.wstring();
+}
+
+bool Config::Load(const std::string& path)
+{
+    RemoveStaleConfigTemps(std::filesystem::path(path));
+    m_loadFailed = true;
+    m_loadIssue = LoadIssue::ReadFailed;
+    m_recoveryBackup.clear();
+    CheckRecovery(path);
+    bool backupAttempted = false;
+    const auto preserve = [&]() {
+        if (backupAttempted) return;
+        backupAttempted = true;
+        m_recoveryBackup = PreserveConfigBackup(std::filesystem::path(path));
+        if (m_recoveryBackup.empty())
+            OutputDebugStringW(L"[NitLink/Config] Backup unavailable or above size cap; original is retained.\n");
+    };
+    const auto failed = [&]() {
+        preserve();
+        OutputDebugStringW(L"[NitLink/Config] Load failed; saves are disabled to preserve the original.\n");
+        return false;
+    };
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(path, ec);
+    if (ec) return failed();
+    if (!exists) {
+        m_loadFailed = false;
+        m_loadIssue = LoadIssue::None;
+        if (Save(path)) return true;
+        m_loadIssue = LoadIssue::FolderNotWritable;
+        OutputDebugStringW(L"[NitLink/Config] Initial settings file could not be created in this folder.\n");
+        return false;
+    }
+
+    // Read a bounded snapshot before parsing so oversized files and lines cannot
+    // grow allocations or partly overwrite settings before rejection.
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) return failed();
+    const auto size = input.tellg();
+    if (size < 0 || size > static_cast<std::streamoff>(kMaxConfigBytes)) return failed();
+    std::string contents(static_cast<size_t>(size), '\0');
+    input.seekg(0);
+    if (size && !input.read(contents.data(), size)) return failed();
+    size_t lineSize = 0;
+    for (unsigned char c : contents) {
+        if (c == '\n') lineSize = 0;
+        else if (++lineSize > kMaxConfigLine) return failed();
+    }
+    std::istringstream file(contents);
 
     // Pre-loop accumulators for capture-format override parsing. Two
     // schemas are accepted: the legacy flat keys from rc2 (one anonymous
@@ -96,6 +334,10 @@ bool Config::Load(const std::string& path)
     std::string line;
     while (std::getline(file, line)) {
         line = Trim(line);
+        if (!IsConfigText(line)) {
+            preserve();
+            continue;
+        }
         if (line.empty() || line[0] == '#' || line[0] == '/') continue;
 
         auto eq = line.find('=');
@@ -112,7 +354,9 @@ bool Config::Load(const std::string& path)
             if (dot == std::string::npos) continue;
             std::string gameId  = key.substr(5, dot - 5);
             std::string setting = key.substr(dot + 1);
-            if (gameId.empty() || setting.empty()) continue;
+            if (gameId.empty() || !IsGameId(gameId) ||
+                (setting != "nis_enabled" && setting != "color_expansion")) continue;
+            if (gameSettings.size() >= 1024 && !gameSettings.contains(gameId)) continue;
 
             // Auto-create the entry if needed
             auto& gs = gameSettings[gameId];
@@ -155,7 +399,13 @@ bool Config::Load(const std::string& path)
         if (key == "low_latency")     lowLatency = ParseBool(val);
         if (key == "prevent_sleep")  preventSleep = ParseBool(val);
         if (key == "present_cap_hz") presentCapHz = ParseI32(val, presentCapHz, -1, 1000);
-        if (key == "aspect_ratio")   aspectRatio  = val.substr(0, 16);
+        if (key == "aspect_ratio") {
+            auto ratio = NumericText(val);
+            const auto colon = ratio.find(':');
+            if (colon != std::string::npos)
+                ratio = Trim(ratio.substr(0, colon)) + ":" + Trim(ratio.substr(colon + 1));
+            aspectRatio = ratio.substr(0, 16);
+        }
         if (key == "no_signal_mode") {
             noSignalMode = (val == "image") ? "image" : "default";
         }
@@ -168,14 +418,9 @@ bool Config::Load(const std::string& path)
         if (key == "panel_width")    panelWidth   = ParseI32(val, panelWidth, 320, 1200);
         if (key == "enable_shaders")  enableShaders = ParseBool(val);
         if (key == "show_overlay")    showOverlay   = ParseBool(val);
-        if (key == "current_game")    currentGameId = val;
+        if (key == "current_game" && IsGameId(val)) currentGameId = val;
         if (key == "preferred_device") {
-            // Capture-device friendly names produced by Windows are
-            // ASCII in practice. Naive narrow-to-wide assignment is
-            // sufficient for the device names this field stores; a
-            // future change to handle non-ASCII names would route this
-            // through MultiByteToWideChar (UTF-8 input expected).
-            preferredDevice.assign(val.begin(), val.end());
+            if (val.size() <= 4096) preferredDevice = ConfigWide(val);
         }
 
         // Capture format overrides. Two schemas accepted:
@@ -201,10 +446,8 @@ bool Config::Load(const std::string& path)
             legacyOverride.fpsDenominator = ParseU32(val, 1, 1, 1000000000);
             sawLegacyOverride = true;
         } else if (key == "capture_override_format") {
-            // Format strings are always ASCII ("NV12" / "P010" / "BGRA"
-            // / "") so the same narrow-to-wide convention as
-            // preferred_device above is safe here.
-            legacyOverride.format.assign(val.begin(), val.end());
+            const auto format = ConfigWide(val);
+            if (IsFormat(format)) legacyOverride.format = format;
             sawLegacyOverride = true;
         } else if (key.rfind("capture_override.", 0) == 0) {
             // capture_override.<N>.<field> = <value>
@@ -214,16 +457,16 @@ bool Config::Load(const std::string& path)
             const auto dot = remainder.find('.');
             if (dot != std::string::npos) {
                 try {
-                    const int idx = std::stoi(remainder.substr(0, dot));
+                    size_t consumed = 0;
+                    const int idx = std::stoi(remainder.substr(0, dot), &consumed);
+                    if (consumed != dot || idx < 0 || idx >= 128) continue;
                     const std::string field = remainder.substr(dot + 1);
                     if (field == "device") {
-                        // Device names are ASCII in practice (same
-                        // convention as preferred_device above).
-                        indexedOverrideDevice[idx].assign(val.begin(), val.end());
+                        if (val.size() <= 4096) indexedOverrideDevice[idx] = ConfigWide(val);
                     } else if (field == "width") {
-                        indexedOverrides[idx].width = std::stoul(val);
+                        indexedOverrides[idx].width = ParseU32(val, 0, 0, 16384);
                     } else if (field == "height") {
-                        indexedOverrides[idx].height = std::stoul(val);
+                        indexedOverrides[idx].height = ParseU32(val, 0, 0, 16384);
                     } else if (field == "fps") {
                         indexedOverrides[idx].fps = ParseU32(val, 0, 0, 1000);
                     } else if (field == "fps_numerator") {
@@ -233,7 +476,8 @@ bool Config::Load(const std::string& path)
                         indexedOverrides[idx].fpsDenominator =
                             ParseU32(val, 1, 1, 1000000000);
                     } else if (field == "format") {
-                        indexedOverrides[idx].format.assign(val.begin(), val.end());
+                        const auto format = ConfigWide(val);
+                        if (IsFormat(format)) indexedOverrides[idx].format = format;
                     }
                 } catch (...) {
                     // Malformed index, skip the line silently.
@@ -243,6 +487,10 @@ bool Config::Load(const std::string& path)
     }
 
     auto normalizeOverrideRate = [](CaptureFormatOverride& ov) {
+        if (static_cast<uint64_t>(ov.fpsNumerator) > 1000ull * ov.fpsDenominator) {
+            ov.fpsNumerator = 0;
+            ov.fps = 0;
+        }
         if (ov.fpsNumerator > 0) {
             if (ov.fpsDenominator == 0) ov.fpsDenominator = 1;
             ov.fps = ov.fpsNumerator / ov.fpsDenominator;
@@ -264,6 +512,7 @@ bool Config::Load(const std::string& path)
     for (const auto& [idx, ov] : indexedOverrides) {
         const auto deviceIt = indexedOverrideDevice.find(idx);
         if (deviceIt == indexedOverrideDevice.end() || deviceIt->second.empty()) continue;
+        if (captureFormatOverrides.size() >= 128 && !captureFormatOverrides.contains(deviceIt->second)) continue;
         captureFormatOverrides[deviceIt->second] = ov;
     }
 
@@ -284,13 +533,36 @@ bool Config::Load(const std::string& path)
         presentPacing = kPacingUnique;
     }
 
+    m_loadFailed = false;
+    m_loadIssue = LoadIssue::None;
+    m_lastSaveFailed = false;
     return true;
 }
 
 bool Config::Save(const std::string& path)
 {
-    std::ofstream file(path);
-    if (!file.is_open()) return false;
+    m_lastSaveFailed = true;
+    if (m_loadFailed) {
+        OutputDebugStringW(L"[NitLink/Config] Save skipped because the configuration failed to load.\n");
+        return false;
+    }
+    const auto preferredUtf8 = ConfigUtf8(preferredDevice);
+    if ((!preferredDevice.empty() && preferredUtf8.empty()) ||
+        preferredUtf8.size() > 4096 || !IsConfigText(preferredUtf8) ||
+        !IsGameId(currentGameId) || !IsConfigText(noSignalImage) ||
+        !IsConfigText(language) || !IsConfigText(aspectRatio) ||
+        !IsConfigText(noSignalMode) || !IsConfigText(noSignalFit) || !IsConfigText(panelSide) ||
+        gameSettings.size() > 1024 || captureFormatOverrides.size() > 128 ||
+        !std::isfinite(audioVolume) || !std::isfinite(pipOpacity) || !std::isfinite(nisSharpness))
+        return false;
+    for (const auto& [id, settings] : gameSettings) if (!IsGameId(id)) return false;
+    for (const auto& [device, format] : captureFormatOverrides) {
+        const auto name = ConfigUtf8(device);
+        if (device.empty() || name.empty() || name.size() > 4096 ||
+            !IsConfigText(name) || !IsFormat(format.format)) return false;
+    }
+
+    std::ostringstream file;
 
     file << "# NitLink Configuration\n";
     file << "# https://github.com/nitlink-dev/nitlink\n\n";
@@ -317,19 +589,7 @@ bool Config::Save(const std::string& path)
     file << "# Friendly name of the preferred capture device, e.g. \"Elgato 4K Pro\".\n";
     file << "# Empty falls back to the first Elgato device when present, otherwise to\n";
     file << "# the first device Media Foundation enumerates.\n";
-    {
-        // Explicit static_cast loop instead of iterator-pair construction
-        // so MSVC does not flag the wchar_t -> char narrowing (C4244).
-        // Capture-device friendly names produced by Windows are ASCII in
-        // practice; non-ASCII names would need WideCharToMultiByte for
-        // a proper UTF-8 round-trip.
-        std::string narrow;
-        narrow.reserve(preferredDevice.size());
-        for (wchar_t wc : preferredDevice) {
-            narrow.push_back(static_cast<char>(wc));
-        }
-        file << "preferred_device = " << narrow << "\n\n";
-    }
+    file << "preferred_device = " << preferredUtf8 << "\n\n";
 
     file << "# Capture format overrides (per device, F1 Source picker)\n";
     file << "# Schema: capture_override.<N>.<field> = <value>\n";
@@ -341,18 +601,8 @@ bool Config::Save(const std::string& path)
         file << "capture_override.count = " << captureFormatOverrides.size() << "\n";
         int idx = 0;
         for (const auto& [device, ov] : captureFormatOverrides) {
-            // Same narrowing convention as preferred_device. Device
-            // names and format strings are ASCII in practice.
-            std::string narrowDevice;
-            narrowDevice.reserve(device.size());
-            for (wchar_t wc : device) {
-                narrowDevice.push_back(static_cast<char>(wc));
-            }
-            std::string narrowFormat;
-            narrowFormat.reserve(ov.format.size());
-            for (wchar_t wc : ov.format) {
-                narrowFormat.push_back(static_cast<char>(wc));
-            }
+            const std::string narrowDevice = ConfigUtf8(device);
+            const std::string narrowFormat = ConfigUtf8(ov.format);
             file << "capture_override." << idx << ".device = " << narrowDevice << "\n";
             file << "capture_override." << idx << ".width = "  << ov.width  << "\n";
             file << "capture_override." << idx << ".height = " << ov.height << "\n";
@@ -462,7 +712,63 @@ bool Config::Save(const std::string& path)
         file << "\n";
     }
 
-    return true;
+    const std::string contents = file.str();
+    if (!file.good() || contents.size() > kMaxConfigBytes) return false;
+    // Replace only a fully written sibling file. A failed write leaves the
+    // previous configuration intact, and CREATE_NEW avoids following a link.
+    const auto target = std::filesystem::path(path).wstring();
+    const DWORD attributes = GetFileAttributesW(target.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY)) {
+        OutputDebugStringW(L"[NitLink/Config] Read-only config: save skipped without retry.\n");
+        return false;
+    }
+    const auto temporary = target + L".tmp-" + UniqueFileSuffix();
+    const auto complete = [&]() {
+        m_lastSaveFailed = false;
+        m_loadIssue = LoadIssue::None;
+        CheckRecovery(path);
+        return true;
+    };
+    HANDLE output = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
+        CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (output == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool saved = WriteFile(output, contents.data(), static_cast<DWORD>(contents.size()), &written, nullptr) &&
+        written == contents.size();
+    const bool closed = CloseHandle(output) != FALSE;
+    if (saved && closed) {
+        DWORD error = ERROR_SUCCESS;
+        // Brief retries cover transient scanner/sync handles without forcing a
+        // disk flush on every render-thread toggle.
+        constexpr int attempts = 5;
+        for (int attempt = 0; attempt < attempts; ++attempt) {
+            if (MoveFileExW(temporary.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING)) return complete();
+            error = GetLastError();
+            if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION) break;
+            if (attempt + 1 < attempts) Sleep(20);
+        }
+        bool recoveryRequired = false;
+        if ((error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION) &&
+            SaveInPlace(target, contents, recoveryRequired)) {
+            DeleteFileW(temporary.c_str());
+            return complete();
+        }
+        if (recoveryRequired) {
+            m_loadFailed = true;
+            m_loadIssue = LoadIssue::RecoveryRequired;
+            std::error_code recoveryError;
+            const auto recovery = std::filesystem::absolute(target + L".save-recovery", recoveryError);
+            m_recoveryBackup = recoveryError ? target + L".save-recovery" : recovery.wstring();
+        } else {
+            CheckRecovery(path);
+        }
+        DeleteFileW(temporary.c_str());
+        OutputDebugStringW(L"[NitLink/Config] Save failed; original settings and any recovery copy retained.\n");
+        return false;
+    }
+    DeleteFileW(temporary.c_str());
+    OutputDebugStringW(L"[NitLink/Config] Temporary write failed; original settings retained.\n");
+    return false;
 }
 
 } // namespace NitLink

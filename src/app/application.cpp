@@ -1,6 +1,9 @@
+#include "../common/input_limits.h"
 #include "application.h"
 #include "capture_device_names.h"
 #include "WebViewSettings.h"
+#include "settings_message.h"
+#include "webview_policy.h"
 #include "game_database.h"
 #include "localization.h"
 #include "capture_output_policy.h"
@@ -18,7 +21,6 @@
 #include <cassert>      // assert: frame-buffer teardown invariant (worker joined)
 #include <debugapi.h>
 #include <shlobj.h>
-#include <shellapi.h>   // ShellExecuteW: openScreenshotFolder dispatch
 #pragma comment(lib, "shell32.lib")
 
 namespace NitLink {
@@ -436,10 +438,13 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     // of leaving them on a black "NO SIGNAL" screen wondering what to do.
     m_firstLaunch = !std::filesystem::exists("nitlink.json");
     m_config = std::make_unique<Config>();
-    m_config->Load("nitlink.json");
+    const bool configLoaded = m_config->Load("nitlink.json");
     Localization::Instance().SetPreference(m_config->language);
-    AppLog(m_firstLaunch ? L"Initialize: config loaded (first launch)"
-                             : L"Initialize: config loaded");
+    if (!configLoaded) {
+        AppLog(L"Initialize: " + ConfigWarning());
+    } else {
+        AppLog(m_firstLaunch ? L"Initialize: config loaded (first launch)" : L"Initialize: config loaded");
+    }
 
     m_window = std::make_unique<Window>();
     Window::Desc windowDesc{};
@@ -453,6 +458,9 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         return false;
     }
     m_window->SetPreventSleep(m_config->preventSleep);
+    m_window->SetCloseCallback([this] {
+        if (m_webviewSettings) m_webviewSettings->DispatchPendingMessages(/*closing=*/true);
+    });
 
     auto [actualW, actualH] = m_window->GetClientSize();
     // Window may not have processed WM_SIZE yet after Show(), so GetClientSize()
@@ -1008,6 +1016,11 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     UpdateWindowTitle();
 
     m_frameBuffer = std::make_unique<FrameBuffer>(format.width, format.height, format.stride);
+    if (!m_frameBuffer->IsValid()) {
+        AppLog(L"Capture frame buffer allocation rejected or failed");
+        m_frameBuffer.reset();
+        return false;
+    }
     AppLog(L"Initialize: frame buffer created");
 
     // Tell the renderer what row order the capture source is delivering.
@@ -1147,68 +1160,47 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
 
 
     m_webviewSettings = std::make_unique<WebViewSettings>();
-    m_webviewSettings->Initialize(m_window->GetHWND(), actualW, actualH);
+    m_webviewSettings->SetFailureHandler([this](const std::wstring& reason) {
+        const bool retrying = m_webviewSettings->IsStarting();
+        m_settingsOpenPending = retrying && (m_settingsOpenPending || m_settingsVisible);
+        m_settingsVisible = false;
+        AppLog(L"Settings: " + Tr(reason.c_str()));
+        if (!retrying || m_toastText.empty() || std::chrono::steady_clock::now() >= m_toastExpiry)
+            ShowToast(Tr(retrying ? L"toast.settingsRetry" : reason.c_str()),
+                      std::chrono::milliseconds(10000));
+    });
+    const bool settingsStarting = m_webviewSettings->Initialize(m_window->GetHWND(), actualW, actualH);
     ApplyPanelLayout();
     m_webviewSettings->SetMessageHandler([this](const std::wstring& msg) {
-        // Length gate first. Every legitimate message in the schema below is
-        // small (a few hundred chars at most); a multi-megabyte string only
-        // means a malformed or hostile sender, and the repeated find() scans
-        // further down would turn it into needless O(n) work. Reject it before
-        // any parsing. This is the bridge's outer trust boundary; treat the
-        // WebView2 sender as untrusted in case navigation is ever not locked
-        // down (see WebViewSettings nav allow-list).
-        if (msg.size() > 8192) {
-            AppLog(L"WebView2 msg: oversized payload, ignoring");
+        const auto message = ParseSettingsMessage(msg);
+        if (!message) {
+            AppLog(L"WebView2: rejected invalid settings message");
             return;
         }
-        // Messages from JS arrive as JSON strings of the form:
-        //   {"action":"toggleHDR","value":true}
-        //   {"action":"setVolume","value":0.75}
-        //   {"action":"ready"}
-        // No full JSON library is pulled in: instead the "action" field
-        // and an optional "value" field are extracted via tiny string
-        // search. Robust enough for the small fixed schema; if more
-        // complex messages land later, nlohmann_json can be vendored.
-        auto extractStr = [&](const wchar_t* key) -> std::wstring {
-            std::wstring needle = std::wstring(L"\"") + key + L"\":\"";
-            auto p = msg.find(needle);
-            if (p == std::wstring::npos) return L"";
-            p += needle.size();
-            auto end = msg.find(L'"', p);
-            return (end == std::wstring::npos) ? L"" : msg.substr(p, end - p);
-        };
-        auto extractRaw = [&](const wchar_t* key) -> std::wstring {
-            // Pull a value that's a number/bool (no quotes). Returns the
-            // raw token; caller parses.
-            std::wstring needle = std::wstring(L"\"") + key + L"\":";
-            auto p = msg.find(needle);
-            if (p == std::wstring::npos) return L"";
-            p += needle.size();
-            auto end = msg.find_first_of(L",}", p);
-            return (end == std::wstring::npos) ? L"" : msg.substr(p, end - p);
-        };
-
-        const std::wstring action = extractStr(L"action");
-        if (action.empty()) return;
+        const std::wstring& action = message->action;
 
         AppLog(L"WebView2 msg: " + action);
 
         if (action == L"ready") {
             // JS finished loading and asked for an initial state dump.
+            AppLog(L"Initialize: WebView2 settings ready");
+            if (m_toastText == Tr(L"toast.settingsStarting") || m_toastText == Tr(L"toast.settingsRetry"))
+                m_toastText.clear();
             PushSettingsState();
             // First-launch experience: if there was no config file on
             // startup (fresh install), open the settings menu now so the
             // user sees the controls right away. Reset the flag so this
             // only fires once per session.
-            if (m_firstLaunch) {
+            if (m_firstLaunch || m_settingsOpenPending) {
                 m_firstLaunch = false;
+                m_settingsOpenPending = false;
                 if (!m_settingsVisible) ToggleSettings();
-                AppLog(L"first launch: opened settings menu automatically");
+                AppLog(L"settings opened after page readiness");
             }
             return;
         }
         if (action == L"setLanguage" && m_config) {
-            const std::wstring requested = extractStr(L"value");
+            const std::wstring requested = message->text;
             if (requested == L"system" || requested == L"en-US" || requested == L"zh-TW") {
                 m_config->language = requested == L"en-US" ? "en-US"
                     : requested == L"zh-TW" ? "zh-TW" : "system";
@@ -1223,7 +1215,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             return;
         }
         if (action == L"setNoSignalMode" && m_config) {
-            const std::wstring requested = extractStr(L"value");
+            const std::wstring requested = message->text;
             if (requested == L"default" || requested == L"image") {
                 m_config->noSignalMode =
                     requested == L"image" ? "image" : "default";
@@ -1252,7 +1244,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             return;
         }
         if (action == L"setNoSignalFit" && m_config) {
-            const std::wstring requested = extractStr(L"value");
+            const std::wstring requested = message->text;
             if (requested == L"contain" || requested == L"cover" ||
                 requested == L"stretch") {
                 m_config->noSignalFit = WideToUtf8(requested);
@@ -1322,24 +1314,14 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             return;
         }
         if (action == L"setVolume" && m_config && m_audioRouter) {
-            const std::wstring raw = extractRaw(L"value");
-            if (!raw.empty()) {
-                float v = std::wcstof(raw.c_str(), nullptr);
-                if (v < 0.0f) v = 0.0f;
-                if (v > 1.0f) v = 1.0f;
-                m_config->audioVolume = v;
-                m_audioRouter->SetVolume(v);
-                // Don't Save() on every slider tick: that would hammer
-                // disk during a drag. Save happens on exit and on
-                // discrete toggles instead.
-            }
+            const float volume = static_cast<float>(message->number);
+            m_config->audioVolume = volume;
+            m_audioRouter->SetVolume(volume);
+            // Slider changes are persisted on exit to avoid disk I/O during a drag.
             return;
         }
         if (action == L"setPiPOpacity") {
-            const std::wstring raw = extractRaw(L"value");
-            wchar_t* end = nullptr;
-            const float opacity = std::wcstof(raw.c_str(), &end);
-            if (end != raw.c_str() && *end == L'\0') SetPiPOpacity(opacity);
+            SetPiPOpacity(static_cast<float>(message->number));
             return;
         }
         if (action == L"cycleAspect") {
@@ -1360,7 +1342,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             // User picked a game from the dropdown. Extract the id, load the
             // saved settings for it (or seed defaults), apply them, push the
             // game to Discord, and persist.
-            const std::wstring wid = extractStr(L"value");
+            const std::wstring wid = message->text;
             std::string id;
             id.reserve(wid.size());
             for (wchar_t wc : wid) id.push_back(static_cast<char>(wc));
@@ -1429,7 +1411,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             // state either way so the JS dropdown re-syncs to reality:
             // on success the new device is highlighted; on failure
             // the dropdown reverts to whatever is actually open.
-            const std::wstring requested = extractStr(L"value");
+            const std::wstring requested = message->text;
             if (requested.empty()) {
                 AppLog(L"setPreferredDevice: empty value, ignoring");
                 PushSettingsState();
@@ -1444,53 +1426,8 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             return;
         }
         if (action == L"setCaptureFormatOverride" && m_config) {
-            // User picked (or cleared) a manual capture format from the
-            // F1 Source picker. The wire payload is a nested object:
-            //   {"action":"setCaptureFormatOverride",
-            //    "value":{"width":1920,"height":1080,"fps":60,"format":"NV12"}}
-            //
-            // The extractStr / extractRaw helpers scan by key name and
-            // would happily pull "width" out of any place in the
-            // message; safe here because no other message
-            // schema uses those four keys, so they only appear inside
-            // the nested object. Each field 0 / empty = Auto for that
-            // axis: the dropdown's "Auto" option emits the empty value.
-            const std::wstring rawW   = extractRaw(L"width");
-            const std::wstring rawH   = extractRaw(L"height");
-            const std::wstring rawFps = extractRaw(L"fps");
-            const std::wstring rawFpsNumerator = extractRaw(L"fpsNumerator");
-            const std::wstring rawFpsDenominator = extractRaw(L"fpsDenominator");
-            const std::wstring fmtStr = extractStr(L"format");
-
-            // Clamp each axis to a sane ceiling. These are untrusted bridge
-            // values; the capture negotiator already rejects nonsensical modes
-            // and falls back to Auto, but clamping here keeps a bogus number
-            // (or a negative, which std::stoul silently wraps) out of the
-            // persisted config in the first place. 0 / empty = Auto per axis.
-            auto parseUint = [](const std::wstring& s, uint32_t hi) -> uint32_t {
-                if (s.empty() || s[0] == L'-') return 0;
-                try {
-                    unsigned long n = std::stoul(s);
-                    return static_cast<uint32_t>(n > hi ? hi : n);
-                } catch (...) { return 0; }
-            };
-
-            auto& cv = m_config->captureFormatOverrides[m_currentDeviceInfo.name];
-            cv.width  = parseUint(rawW, 16384);
-            cv.height = parseUint(rawH, 16384);
-            cv.fps    = parseUint(rawFps, 1000);
-            cv.fpsNumerator = parseUint(rawFpsNumerator, 1000000000);
-            cv.fpsDenominator = parseUint(rawFpsDenominator, 1000000000);
-            if (cv.fpsNumerator > 0) {
-                if (cv.fpsDenominator == 0) cv.fpsDenominator = 1;
-                cv.fps = cv.fpsNumerator / cv.fpsDenominator;
-            } else {
-                // Integer-only payloads are legacy/compatibility input. Keep
-                // the rational unresolved so native-mode negotiation can map
-                // 59 back to 60000/1001 instead of inventing 59/1.
-                cv.fpsDenominator = 1;
-            }
-            cv.format = fmtStr;
+            const auto& cv = message->format;
+            m_config->captureFormatOverrides[m_currentDeviceInfo.name] = cv;
             m_config->Save("nitlink.json");
 
             AppLog(L"setCaptureFormatOverride [" + m_currentDeviceInfo.name + L"]: "
@@ -1515,29 +1452,36 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             return;
         }
         if (action == L"openScreenshotFolder") {
-            // User clicked the screenshot toast's path link. Open Windows
-            // Explorer with the file pre-selected (/select switch).
-            const std::wstring path = extractStr(L"value");
-            // path is untrusted bridge input that gets interpolated into a
-            // quoted explorer.exe argument. An embedded double-quote could
-            // break out of the quoting and inject extra switches (e.g.
-            // /root,<dir>), so reject those outright. Also require the path to
-            // actually exist on disk, since this action only ever opens a file
-            // NitLink itself just wrote, so a non-existent path is bogus.
-            std::error_code existsEc;
-            if (!path.empty() &&
-                path.find(L'"') == std::wstring::npos &&
-                std::filesystem::exists(path, existsEc)) {
-                const std::wstring args = L"/select,\"" + path + L"\"";
-                ShellExecuteW(nullptr, nullptr, L"explorer.exe",
-                              args.c_str(), nullptr, SW_SHOWNORMAL);
+            // The page requests an operation, never a filesystem target.
+            const auto& path = m_screenshotToReveal;
+            if (!WebViewPolicy::IsLocalScreenshotPath(path)) {
+                AppLog(L"Screenshot reveal: the saved path is not a supported local PNG path");
+                return;
+            }
+            const std::wstring root = path.substr(0, 3);
+            const UINT driveType = GetDriveTypeW(root.c_str());
+            if (driveType != DRIVE_FIXED && driveType != DRIVE_REMOVABLE &&
+                driveType != DRIVE_RAMDISK) {
+                AppLog(L"Screenshot reveal: network or unsupported drive location");
+                return;
+            }
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec)) return;
+            PIDLIST_ABSOLUTE item = nullptr;
+            const HRESULT parseHr = SHParseDisplayName(path.c_str(), nullptr, &item, 0, nullptr);
+            if (SUCCEEDED(parseHr)) {
+                const HRESULT openHr = SHOpenFolderAndSelectItems(item, 0, nullptr, 0);
+                CoTaskMemFree(item);
+                if (FAILED(openHr)) AppLog(L"Screenshot: could not open containing folder");
             }
             return;
         }
     });
-    m_webviewSettings->NavigateToFile(L"nitlink-menu.html");
-    m_webviewSettings->Show(false);
-    AppLog(L"Initialize: WebView2 settings ready");
+    if (settingsStarting) {
+        m_webviewSettings->NavigateToMenu();
+        m_webviewSettings->Show(false);
+        AppLog(L"Initialize: WebView2 settings starting");
+    }
 
     // Discord Rich Presence. Connection is optional: if Discord isn't
     // running on the user's machine, Connect() returns false and RPC updates
@@ -1889,6 +1833,10 @@ void Application::Run()
         }
 
         if (!m_running) break;
+        if (m_webviewSettings) {
+            m_webviewSettings->CheckHealth();
+            m_webviewSettings->DispatchPendingMessages();
+        }
 
         m_hotkeyManager->Poll();
 
@@ -2992,30 +2940,15 @@ void Application::Run()
                 }
             }
 
-            // Transient toast (separate D2D pass on top of everything else).
-            // Fades over the last 500 ms so it doesn't pop out.
-            if (m_overlay && !m_toastText.empty()) {
-                const auto now = std::chrono::steady_clock::now();
-                if (now < m_toastExpiry) {
-                    const auto remaining = std::chrono::duration<float>(m_toastExpiry - now).count();
-                    const float alpha = (remaining < 0.5f) ? (remaining / 0.5f) : 1.0f;
-                    m_overlay->DrawToast(
-                        m_renderer->GetWindowWidth(), m_renderer->GetWindowHeight(),
-                        m_toastText.c_str(), alpha);
-                    if (m_overlay->IsUsingOffscreen()) {
-                        m_renderer->CompositeUI(m_overlay->GetOffscreenSRV());
-                    }
-                } else {
-                    m_toastText.clear();
-                }
-            }
+            const bool takingScreenshot = m_screenshotRequested.exchange(false);
+            DrawStatusNotice(takingScreenshot);
 
             // Screenshot dispatch fires before Present. With FLIP_DISCARD the
             // backbuffer becomes undefined after Present, so a post-Present
             // readback would copy garbage. Both render branches need this
             // site since either path may run on a given frame; the atomic
             // exchange guarantees a single fire per hotkey press.
-            if (m_screenshotRequested.exchange(false)) {
+            if (takingScreenshot) {
                 TakeScreenshot();
             }
 
@@ -3167,25 +3100,12 @@ void Application::Run()
                 L"overlay.waitingForSource", 0.72f);
         }
 
-        // Transient toast: see matching block in the HDR branch above.
-        // In SDR the D2D target is the backbuffer directly, so no
-        // CompositeUI is needed.
-        if (m_overlay && !m_toastText.empty()) {
-            const auto now = std::chrono::steady_clock::now();
-            if (now < m_toastExpiry) {
-                const auto remaining = std::chrono::duration<float>(m_toastExpiry - now).count();
-                const float alpha = (remaining < 0.5f) ? (remaining / 0.5f) : 1.0f;
-                m_overlay->DrawToast(
-                    m_renderer->GetWindowWidth(), m_renderer->GetWindowHeight(),
-                    m_toastText.c_str(), alpha);
-            } else {
-                m_toastText.clear();
-            }
-        }
+        const bool takingScreenshot = m_screenshotRequested.exchange(false);
+        DrawStatusNotice(takingScreenshot);
 
         // Screenshot dispatch: see HDR branch above for the FLIP_DISCARD
         // rationale.
-        if (m_screenshotRequested.exchange(false)) {
+        if (takingScreenshot) {
             TakeScreenshot();
         }
 
@@ -3201,6 +3121,7 @@ void Application::Run()
 void Application::Shutdown()
 {
     m_running = false;
+    if (m_webviewSettings) m_webviewSettings->DispatchPendingMessages(/*closing=*/true);
     if (m_window) m_window->SetVideoAvailable(false);
     m_4kxPoller.Stop();
 
@@ -3352,19 +3273,87 @@ void Application::ToggleOverlay()
 void Application::ShowToast(const std::wstring& text,
                               std::chrono::milliseconds duration)
 {
+    m_toastIsConfigWarning = false;
     m_toastText   = text;
     m_toastExpiry = std::chrono::steady_clock::now() + duration;
 }
 
+std::wstring Application::ConfigWarning() const {
+    if (!m_config) return {};
+    std::wstring warning;
+    if (m_config->GetLoadIssue() == Config::LoadIssue::FolderNotWritable) {
+        std::error_code error;
+        const auto path = std::filesystem::absolute("nitlink.json", error);
+        warning = Localization::Instance().Format(L"toast.configFolderNotWritable",
+            {{L"path", error ? L"nitlink.json" : path.wstring()}});
+    } else if (m_config->GetLoadIssue() == Config::LoadIssue::RecoveryRequired) {
+        warning = Localization::Instance().Format(L"toast.configRecoveryRequired",
+            {{L"backup", m_config->RecoveryBackup()}});
+    } else if (m_config->GetLoadIssue() == Config::LoadIssue::ReadFailed) {
+        const auto& backup = m_config->RecoveryBackup();
+        warning = backup.empty() ? Tr(L"toast.configLoadFailed") :
+            Localization::Instance().Format(L"toast.configLoadFailedBackup",
+                {{L"backup", std::filesystem::path(backup).filename().wstring()}});
+    } else if (m_config->LastSaveFailed()) {
+        warning = Tr(L"toast.configSaveFailed");
+    }
+    if (!m_config->SaveRecovery().empty() &&
+        m_config->GetLoadIssue() != Config::LoadIssue::RecoveryRequired) {
+        if (!warning.empty()) warning += L" ";
+        warning += Localization::Instance().Format(L"toast.configRecoveryCopy",
+            {{L"backup", m_config->SaveRecovery()}});
+    }
+    return warning;
+}
+
+void Application::DrawStatusNotice(bool takingScreenshot) {
+    if (!m_overlay || !m_renderer) return;
+    const auto now = std::chrono::steady_clock::now();
+    const auto warning = ConfigWarning();
+    if (warning.empty()) m_lastConfigWarning.clear();
+    // Give each new warning one normal toast, after any existing notice.
+    // The F1 banner remains available after the toast expires.
+    if (!takingScreenshot && !m_settingsVisible && !warning.empty() &&
+        warning != m_lastConfigWarning && (m_toastText.empty() || now >= m_toastExpiry)) {
+        ShowToast(warning, std::chrono::milliseconds(8000));
+        m_toastIsConfigWarning = true;
+        m_lastConfigWarning = warning;
+    }
+    if (now >= m_toastExpiry) m_toastText.clear();
+    if (m_toastText.empty() || (takingScreenshot && m_toastIsConfigWarning)) return;
+    const auto remaining = std::chrono::duration<float>(m_toastExpiry - now).count();
+    const float alpha = remaining < 0.5f ? remaining / 0.5f : 1.0f;
+    m_overlay->DrawToast(m_renderer->GetWindowWidth(), m_renderer->GetWindowHeight(),
+                         m_toastText.c_str(), alpha);
+    if (m_overlay->IsUsingOffscreen())
+        m_renderer->CompositeUI(m_overlay->GetOffscreenSRV());
+}
+
 void Application::ToggleSettings()
 {
+    if (!m_webviewSettings || !m_webviewSettings->IsReady()) {
+        m_settingsVisible = false;
+        if (m_webviewSettings && m_webviewSettings->IsStarting()) {
+            m_firstLaunch = false;
+            m_settingsOpenPending = !m_settingsOpenPending;
+            if (m_settingsOpenPending) ShowToast(Tr(L"toast.settingsStarting"), std::chrono::milliseconds(4000));
+            else if (m_toastText == Tr(L"toast.settingsStarting")) m_toastText.clear();
+            return;
+        }
+        const auto reason = m_webviewSettings ? m_webviewSettings->InitializationError() : std::wstring{};
+        auto text = Tr(reason.empty() ? L"toast.settingsStartFailed" : reason.c_str());
+        ShowToast(text, std::chrono::milliseconds(15000));
+        return;
+    }
     m_settingsVisible = !m_settingsVisible;
     if (m_webviewSettings) {
         m_webviewSettings->Show(m_settingsVisible);
         // Push current state every time the menu opens so toggles reflect
         // the truth: important for things that can change outside the menu
         // (Alt+H for HDR, Ctrl+G for game cycle).
-        if (m_settingsVisible) PushSettingsState();
+        if (m_settingsVisible) {
+            PushSettingsState();
+        }
     }
 }
 
@@ -4072,6 +4061,11 @@ bool Application::ReconcileCaptureFormat(bool force)
     UpdateWindowTitle();
 
     m_frameBuffer = std::make_unique<FrameBuffer>(format.width, format.height, format.stride);
+    if (!m_frameBuffer->IsValid()) {
+        AppLog(L"Capture frame buffer allocation rejected or failed");
+        m_frameBuffer.reset();
+        return false;
+    }
 
     // Reset the frame differ's per-stream state. Its m_prevTex still holds
     // luma from the previous capture format's frames, and its smoothing ring
@@ -4294,22 +4288,11 @@ static const char* const kAspectPresets[] = { "auto", "4:3", "16:9", "16:10", "2
 // Parses the config string into the renderer's override value: 0 for
 // auto, a negative value for stretch, otherwise width divided by height.
 // Anything unparseable falls back to auto so a typo cannot blank the picture.
-static float AspectOverrideFromString(const std::string& text)
-{
-    if (text == "auto")    return 0.0f;
-    if (text == "stretch") return -1.0f;
-    const size_t colon = text.find(':');
-    if (colon == std::string::npos) return 0.0f;
-    const float w = static_cast<float>(std::atof(text.substr(0, colon).c_str()));
-    const float h = static_cast<float>(std::atof(text.substr(colon + 1).c_str()));
-    if (w < 0.5f || h < 0.5f || w > 100.0f || h > 100.0f) return 0.0f;
-    return w / h;
-}
 
 std::wstring Application::ApplyAspectRatio()
 {
     std::string text = m_config ? m_config->aspectRatio : std::string("auto");
-    const float ratio = AspectOverrideFromString(text);
+    const float ratio = ParseAspectRatio(text);
     if (ratio == 0.0f && text != "auto") text = "auto";
     if (m_renderer) m_renderer->SetAspectOverride(ratio);
     std::wstring label(text.begin(), text.end());
@@ -4363,18 +4346,32 @@ void Application::CycleAspectRatio()
 bool Application::ApplyNoSignalSettings(bool forceReload)
 {
     if (!m_overlay || !m_config) return false;
-
     const std::wstring imagePath = Utf8ToWide(m_config->noSignalImage);
+    const bool imageMode = m_config->noSignalMode == "image";
+    const auto notifyFailure = [&](const wchar_t* key) {
+        const bool changed = m_failedNoSignalPath != imagePath || m_failedNoSignalReason != key;
+        m_failedNoSignalPath = imagePath;
+        m_failedNoSignalReason = key;
+        if (!changed && !forceReload) return;
+        const auto reason = Tr(key);
+        AppLog(L"No Signal: " + reason);
+        if (m_settingsVisible && m_webviewSettings)
+            m_webviewSettings->PostMessage(L"{\"toast\":\"" + JsonEscapeWide(reason) + L"\"}");
+        else
+            ShowToast(reason, std::chrono::milliseconds(8000));
+    };
     if (!m_config->noSignalImage.empty() && imagePath.empty()) {
-        AppLog(L"No Signal image path is not valid UTF-8; using branded fallback");
+        if (imageMode) notifyFailure(L"toast.imageInvalidPath");
         return false;
     }
-
     const bool loaded = m_overlay->SetNoSignalSettings(
         m_config->noSignalMode, imagePath, m_config->noSignalFit,
         m_config->noSignalDimImage, forceReload);
-    if (!loaded && m_config->noSignalMode == "image") {
-        AppLog(L"No Signal custom image is unavailable; using branded fallback");
+    if (!loaded && imageMode && !imagePath.empty()) {
+        notifyFailure(ImageLoadErrorKey(m_overlay->GetNoSignalImageError()));
+    } else if (imageMode) {
+        m_failedNoSignalPath.clear();
+        m_failedNoSignalReason.clear();
     }
     return loaded;
 }
@@ -4458,9 +4455,7 @@ bool Application::ChooseNoSignalImage()
     if (!m_config->Save("nitlink.json")) {
         AppLog(L"No Signal image: could not save nitlink.json");
     }
-    ShowToast(loaded ? Tr(L"toast.noSignalImageLoaded")
-                     : Tr(L"toast.noSignalImageLoadFailed"),
-              std::chrono::milliseconds(5000));
+    if (loaded) ShowToast(Tr(L"toast.noSignalImageLoaded"), std::chrono::milliseconds(5000));
     PushSettingsState();
     return true;
 }
@@ -4920,10 +4915,12 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"scalerName\":\"Catmull-Rom\",";
     js << L"\"aspectRatio\":\"" << JsonEscapeWide(ApplyAspectRatio()) << L"\",";
     js << L"\"panelSide\":\"" << ApplyPanelLayout() << L"\",";
+    js << L"\"configWarning\":\"" << JsonEscapeWide(ConfigWarning()) << L"\",";
     js << L"\"noSignalMode\":\""
        << JsonEscapeWide(Utf8ToWide(m_config->noSignalMode)) << L"\",";
     js << L"\"noSignalImage\":\""
        << JsonEscapeWide(Utf8ToWide(m_config->noSignalImage)) << L"\",";
+    js << L"\"noSignalImageAvailable\":" << (m_overlay && m_overlay->HasNoSignalImage() ? L"true" : L"false") << L",";
     js << L"\"noSignalFit\":\""
        << JsonEscapeWide(Utf8ToWide(m_config->noSignalFit)) << L"\",";
     js << L"\"noSignalDimImage\":"
@@ -5147,7 +5144,7 @@ void Application::ApplyGameSettings(const std::string& gameId)
 
 void Application::UpdateDiscordForCurrentGame()
 {
-    if (!m_discord || !m_discord->IsConnected() || !m_config) return;
+    if (!m_discord || !m_config) return;
 
     if (m_config->currentGameId.empty()) {
         // No game: back to idle presence
@@ -5236,6 +5233,7 @@ void Application::TakeScreenshot()
     if (ok) {
         AppLog(L"Screenshot saved: " + fullPath);
         m_lastScreenshotPath = fullPath;
+        m_screenshotToReveal = fullPath;
         PushSettingsState();
 
         // Surface a renderer-overlay toast so the user sees the save
