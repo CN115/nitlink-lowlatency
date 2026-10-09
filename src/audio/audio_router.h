@@ -2,6 +2,7 @@
 
 #include <string>
 #include "drift_controller.h"
+#include "audio_convert.h"
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -51,6 +52,13 @@ public:
     uint32_t RenderPeriodUs() const { return m_periodUs.load(); }
     uint64_t Resyncs() const { return m_resyncs.load(); }
     bool AdaptiveSupported() const { return m_adaptiveSupported.load(); }
+    std::wstring EndpointInfo() const;
+    // One atomic publication: FIFO and render occupancy after the SAME pump.
+    uint64_t QueueSnapshotUs() const { return m_queueSnapshot.load(); }
+    uint32_t EffectiveQueueUs() const { return m_effectiveQueueUs.load(); }
+    uint32_t FifoAverageUs() const { return m_fifoAverageUs.load(); }
+    uint32_t FifoMinUs() const { return m_fifoMinUs.load(); }
+    uint32_t FifoMaxUs() const { return m_fifoMaxUs.load(); }
 
     float GetVolume() const { return m_volume; }
     bool  IsMuted()   const { return m_muted; }
@@ -107,6 +115,18 @@ private:
     void LogStatsIfDue();
     UINT32 FifoResample(BYTE* out, UINT32 frames, double ratio);
     void ResetDrift();
+    void PublishQueue(UINT32 padding);
+    bool PrepareConversion();
+    AudioConvert::Format m_inputPcm{}, m_outputPcm{};
+    AudioConvert::SincKernel m_sinc;
+    bool m_conversionReady = false;
+    mutable std::mutex m_endpointInfoMutex;
+    std::wstring m_endpointInfo = L"Waiting for endpoints";
+    std::atomic<uint64_t> m_queueSnapshot{0};
+    std::atomic<uint32_t> m_effectiveQueueUs{0}, m_fifoAverageUs{0}, m_fifoMinUs{0}, m_fifoMaxUs{0};
+    std::chrono::steady_clock::time_point m_occupancyStart{}, m_occupancyLast{};
+    double m_occupancyIntegral = 0, m_occupancySeconds = 0;
+    uint32_t m_occupancyPrevious = 0, m_occupancyMin = UINT32_MAX, m_occupancyMax = 0;
     std::atomic<int> m_fifoTargetMs{12}, m_renderQueueTargetMs{10};
     std::atomic<bool> m_driftEnabled{true};
     std::atomic<uint32_t> m_queueMs{0}, m_periodUs{0};
