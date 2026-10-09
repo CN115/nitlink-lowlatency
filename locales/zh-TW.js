@@ -1,6 +1,23 @@
 // NitLink Traditional Chinese (Taiwan) UI resource.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['zh-TW'] = {
+  'audio.latencyTitle': "音訊低延遲實驗室",
+  'audio.fifo': "擷取 FIFO 目標",
+  'audio.render': "播放佇列目標",
+  'audio.drift': "自適應時鐘漂移補償",
+  'audio.help': "變更立即生效，音訊會短暫重啟。建議從 12 / 10 ms 開始逐步調低；若出現爆音或斷音請提高緩衝。Windows 可能限制最低播放緩衝。佇列數值不包含採集卡、USB、混音器與播放設備延遲。",
+  'audio.health': "即時音訊狀態",
+  'audio.refresh': "重新整理",
+  'audio.running': "播放中",
+  'audio.waiting': "等待音訊裝置",
+  'audio.fallback': "濾波後單幀修正",
+  'audio.off': "漂移補償關閉",
+  'audio.queued': "播放",
+  'audio.period': "引擎週期",
+  'audio.correction': "修正",
+  'audio.underruns': "欠載幀",
+  'audio.dropped': "丟棄幀",
+  'audio.resyncs': "重新同步",
   'page.settings': 'NitLink · 設定',
   'nav.video': '影像',
   'nav.audio': '音訊',
