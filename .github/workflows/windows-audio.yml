@@ -1,0 +1,43 @@
+name: Windows audio lab
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure x64 Release
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DNITLINK_TEST_WEBVIEW_RUNTIME=OFF
+      - name: Compile application and tests
+        run: cmake --build build --config Release --parallel 4
+      - name: Run tests
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 90
+      - name: Package portable Windows build
+        shell: pwsh
+        run: |
+          cmake --install build --config Release --prefix staging
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item AUDIO_TESTING.txt staging/bin/
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw 'VC runtime folder not found' }
+          Copy-Item "$($crt.FullName)/*.dll" staging/bin/
+          "commit=$env:GITHUB_SHA`nupstream=d522bdc`nvariant=CN115 audio-lab 1" | Set-Content staging/bin/BUILD.txt
+          Get-ChildItem staging/bin -File -Recurse | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath((Resolve-Path staging/bin), $_.FullName)
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $relative"
+          } | Set-Content staging/bin/SHA256SUMS.txt
+          Compress-Archive -Path staging/bin/* -DestinationPath NitLink-CN115-audio-lab1-win64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NitLink-CN115-audio-lab1-win64
+          path: NitLink-CN115-audio-lab1-win64.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-test-results
+          path: build/Testing/Temporary/LastTest.log
