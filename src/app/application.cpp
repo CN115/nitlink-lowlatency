@@ -1110,6 +1110,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     }
 
     m_audioRouter = std::make_unique<AudioRouter>();
+    m_audioRouter->SetLatency(m_config->audioFifoMs, m_config->audioRenderMs, m_config->audioDrift);
     // Route audio from the selected capture card to the default playback device.
     //
     // Pass the selected video device's full name as the audio endpoint hint
@@ -1311,6 +1312,15 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             m_config->preventSleep = !m_config->preventSleep;
             m_window->SetPreventSleep(m_config->preventSleep);
             m_config->Save("nitlink.json");
+            return;
+        }
+        if ((action == L"setAudioFifoMs" || action == L"setAudioRenderMs" || action == L"setAudioDrift") && m_config && m_audioRouter) {
+            if (action == L"setAudioFifoMs") m_config->audioFifoMs = static_cast<int>(message->number);
+            if (action == L"setAudioRenderMs") m_config->audioRenderMs = static_cast<int>(message->number);
+            if (action == L"setAudioDrift") m_config->audioDrift = message->number != 0;
+            m_audioRouter->SetLatency(m_config->audioFifoMs, m_config->audioRenderMs, m_config->audioDrift);
+            m_config->Save("nitlink.json");
+            PushSettingsState();
             return;
         }
         if (action == L"setVolume" && m_config && m_audioRouter) {
@@ -4910,6 +4920,20 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"lowLatency\":"        << (m_config->lowLatency        ? L"true" : L"false") << L",";
     js << L"\"preventSleep\":"      << (m_config->preventSleep      ? L"true" : L"false") << L",";
     js << L"\"audioMuted\":"        << (m_config->audioMuted        ? L"true" : L"false") << L",";
+    js << L"\"audioFifoMs\":" << m_config->audioFifoMs << L",";
+    js << L"\"audioRenderMs\":" << m_config->audioRenderMs << L",";
+    js << L"\"audioDrift\":" << (m_config->audioDrift ? L"true" : L"false") << L",";
+    if (m_audioRouter) {
+        js << L"\"audioFillMs\":" << m_audioRouter->FifoFillMs() << L",";
+        js << L"\"audioQueueMs\":" << m_audioRouter->RenderQueueMs() << L",";
+        js << L"\"audioPeriodUs\":" << m_audioRouter->RenderPeriodUs() << L",";
+        js << L"\"audioPpm\":" << m_audioRouter->DriftPpm() << L",";
+        js << L"\"audioUnderruns\":" << m_audioRouter->Underruns() << L",";
+        js << L"\"audioOverruns\":" << m_audioRouter->Overruns() << L",";
+        js << L"\"audioResyncs\":" << m_audioRouter->Resyncs() << L",";
+        js << L"\"audioAdaptive\":" << (m_audioRouter->AdaptiveSupported() ? L"true" : L"false") << L",";
+        js << L"\"audioStreaming\":" << (m_audioRouter->IsStreaming() ? L"true" : L"false") << L",";
+    }
     js << L"\"volume\":"            << m_config->audioVolume        << L",";
     js << L"\"pipOpacity\":"        << m_config->pipOpacity         << L",";
     js << L"\"scalerName\":\"Catmull-Rom\",";
