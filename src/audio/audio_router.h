@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include "drift_controller.h"
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -44,6 +45,12 @@ public:
 
     void SetVolume(float volume); // 0.0 - 1.0
     void SetMuted(bool muted);
+    void SetLatency(int fifoMs, int renderMs, bool drift);
+    uint32_t RenderQueueMs() const { return m_queueMs.load(); }
+    int DriftPpm() const { return m_driftPpm.load(); }
+    uint32_t RenderPeriodUs() const { return m_periodUs.load(); }
+    uint64_t Resyncs() const { return m_resyncs.load(); }
+    bool AdaptiveSupported() const { return m_adaptiveSupported.load(); }
 
     float GetVolume() const { return m_volume; }
     bool  IsMuted()   const { return m_muted; }
@@ -98,6 +105,18 @@ private:
     UINT32 FifoPop(BYTE* out, UINT32 frames);
     void FifoSkip(UINT32 frames);
     void LogStatsIfDue();
+    UINT32 FifoResample(BYTE* out, UINT32 frames, double ratio);
+    void ResetDrift();
+    std::atomic<int> m_fifoTargetMs{12}, m_renderQueueTargetMs{10};
+    std::atomic<bool> m_driftEnabled{true};
+    std::atomic<uint32_t> m_queueMs{0}, m_periodUs{0};
+    std::atomic<int> m_driftPpm{0};
+    std::atomic<uint64_t> m_resyncs{0};
+    std::atomic<bool> m_adaptiveSupported{false};
+    UINT32 m_renderPeriodFrames = 0;
+    DriftController m_drift;
+    double m_phase = 1.0, m_slipBudget = 0;
+    std::chrono::steady_clock::time_point m_lastDrift{};
 
     std::wstring m_nameHint = L"Elgato";
 
