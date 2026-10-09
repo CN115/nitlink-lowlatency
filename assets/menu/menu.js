@@ -116,6 +116,7 @@
         post(action, n);
       });
     }
+    document.getElementById('audio-exclusive')?.addEventListener('change', e => post('setAudioExclusive', e.target.checked));
     document.getElementById('audio-drift')?.addEventListener('change', e => post('setAudioDrift', e.target.checked));
     document.getElementById('audio-refresh')?.addEventListener('click', () => post('ready'));
 
@@ -566,16 +567,6 @@
         e.stopPropagation();
         togglePop();
       });
-      for (const [id, action] of [['audio-fifo','setAudioFifoMs'], ['audio-render','setAudioRenderMs']]) {
-      document.getElementById(id)?.addEventListener('change', e => {
-        const n = Number(e.target.value);
-        if (!Number.isInteger(n) || n < 3 || n > 100) { e.target.reportValidity(); return; }
-        post(action, n);
-      });
-    }
-    document.getElementById('audio-drift')?.addEventListener('change', e => post('setAudioDrift', e.target.checked));
-    document.getElementById('audio-refresh')?.addEventListener('click', () => post('ready'));
-
     document.addEventListener('click', e => {
         if (!pop.contains(e.target) && !trigger.contains(e.target)) closePop();
       });
@@ -719,14 +710,19 @@
         const input = document.getElementById(id);
         if (input && document.activeElement !== input && Number.isFinite(s[key])) input.value = s[key];
       }
+      const exclusiveInput = document.getElementById('audio-exclusive');
+      if (exclusiveInput && typeof s.audioExclusive === 'boolean') exclusiveInput.checked = s.audioExclusive;
+      const renderInput = document.getElementById('audio-render');
+      if (renderInput) renderInput.disabled = s.audioExclusiveActive === true;
       const driftInput = document.getElementById('audio-drift');
       if (driftInput && typeof s.audioDrift === 'boolean') driftInput.checked = s.audioDrift;
       const health = document.getElementById('audio-health');
       if (health && typeof s.audioFillMs === 'number') {
         const ms = value => Number.isFinite(value) ? value.toFixed(2) : '--';
         health.textContent = `${s.audioStreaming ? t('audio.running') : t('audio.waiting')} · ${s.audioAdaptive ? 'Sinc SRC' : t('audio.fallback')} · ${s.audioDrift ? t('audio.driftOn') : t('audio.off')}\n` +
-          `${t('audio.requested')} ${ms(s.audioRenderMs)} ms → ${t('audio.effective')} ${ms(s.audioEffectiveMs)} ms\n` +
-          `FIFO ${ms(s.audioFillMs)} ms + ${t('audio.queued')} ${ms(s.audioQueueMs)} ms (${t('audio.afterPump')})\n` +
+          (s.audioExclusiveActive
+            ? `${t('audio.exclusiveAuto')} · ${t('audio.block')} ${ms(s.audioEffectiveMs)} ms\nFIFO ${ms(s.audioFillMs)} ms (${t('audio.afterPump')})\n`
+            : `${t('audio.requested')} ${ms(s.audioRenderMs)} ms → ${t('audio.effective')} ${ms(s.audioEffectiveMs)} ms\nFIFO ${ms(s.audioFillMs)} ms + ${t('audio.queued')} ${ms(s.audioQueueMs)} ms (${t('audio.afterPump')})\n`) +
           `FIFO ${t('audio.average')} ${ms(s.audioAverageMs)} ms [${ms(s.audioMinMs)}–${ms(s.audioMaxMs)}]\n` +
           `${t('audio.period')} ${ms(s.audioPeriodUs / 1000)} ms · ${t('audio.correction')} ${s.audioPpm} ppm\n` +
           `${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}\n` +
