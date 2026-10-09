@@ -723,9 +723,14 @@
       if (driftInput && typeof s.audioDrift === 'boolean') driftInput.checked = s.audioDrift;
       const health = document.getElementById('audio-health');
       if (health && typeof s.audioFillMs === 'number') {
-        health.textContent = `${s.audioStreaming ? t('audio.running') : t('audio.waiting')} · ${s.audioDrift ? (s.audioAdaptive ? 'Cubic ASRC' : t('audio.fallback')) : t('audio.off')}\n` +
-          `FIFO ${s.audioFillMs} ms + ${t('audio.queued')} ${s.audioQueueMs} ms · ${t('audio.period')} ${(s.audioPeriodUs / 1000).toFixed(2)} ms\n` +
-          `${t('audio.correction')} ${s.audioPpm} ppm · ${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}`;
+        const ms = value => Number.isFinite(value) ? value.toFixed(2) : '--';
+        health.textContent = `${s.audioStreaming ? t('audio.running') : t('audio.waiting')} · ${s.audioAdaptive ? 'Sinc SRC' : t('audio.fallback')} · ${s.audioDrift ? t('audio.driftOn') : t('audio.off')}\n` +
+          `${t('audio.requested')} ${ms(s.audioRenderMs)} ms → ${t('audio.effective')} ${ms(s.audioEffectiveMs)} ms\n` +
+          `FIFO ${ms(s.audioFillMs)} ms + ${t('audio.queued')} ${ms(s.audioQueueMs)} ms (${t('audio.afterPump')})\n` +
+          `FIFO ${t('audio.average')} ${ms(s.audioAverageMs)} ms [${ms(s.audioMinMs)}–${ms(s.audioMaxMs)}]\n` +
+          `${t('audio.period')} ${ms(s.audioPeriodUs / 1000)} ms · ${t('audio.correction')} ${s.audioPpm} ppm\n` +
+          `${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}\n` +
+          (s.audioEndpointInfo || '');
       }
 
       if (typeof s.volume === 'number') {
