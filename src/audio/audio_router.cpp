@@ -24,11 +24,8 @@ static constexpr REFERENCE_TIME REFTIMES_PER_MILLISEC = 10000;
 // How long to wait before re-attempting an endpoint that failed to open.
 static constexpr int kRetryIntervalMs = 500;
 
-// Pump geometry. kFifoCapacityMs bounds how far capture may run ahead before
-// the oldest audio is discarded; kFifoTargetMs is the fill the drift control
-// steers toward and kFifoDeadbandMs the band it leaves alone. kRenderQueueMs
-// is how much audio stays queued inside the render endpoint: enough to ride
-// out scheduling jitter, small enough not to add noticeable latency.
+// Fixed allocation bounds pathological packet bursts; configured targets and
+// emergency trimming keep normal latency far below this capacity.
 static constexpr int   kFifoCapacityMs  = 400;
 
 static constexpr int   kStatsIntervalMs = 5000;
@@ -487,7 +484,7 @@ bool AudioRouter::SetupRender()
         if (FAILED(hr)) { AudioLog(L"render Initialize failed " + HrString(hr)); return false; }
     }
 
-    hr = m_renderClient->SetEventHandle(m_renderEvent);
+    hr = lowPeriod ? S_OK : m_renderClient->SetEventHandle(m_renderEvent);
     if (FAILED(hr)) { AudioLog(L"render SetEventHandle failed " + HrString(hr)); return false; }
     hr = m_renderClient->GetBufferSize(&m_renderBufferFrames);
     if (FAILED(hr) || !m_renderBufferFrames || m_renderBufferFrames > m_renderFormat->nSamplesPerSec * 2) return false;
