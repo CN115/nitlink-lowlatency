@@ -44,37 +44,42 @@ struct AudioRouterTestAccess {
         const auto size = router.m_fifoBytes;
         router.FifoPush(nullptr, 2, false);
         Check(size == router.m_fifoBytes, "null data not copied");
-        // Interleaved stereo ramp across ring wrap; both channels share phase.
-        router.FifoReset(8, 48000);
-        WAVEFORMATEX wave{WAVE_FORMAT_IEEE_FLOAT, 2, 48000, 384000, 8, 32, 0};
-        router.m_renderFormat = CloneWaveFormat(&wave);
-        const size_t capacity = router.m_fifo.size() / 8;
-        router.m_fifoHead = (capacity - 4) * 8;
-        float ramp[64];
-        for (int i=0; i<32; ++i) { ramp[2*i] = i / 100.0f; ramp[2*i+1] = -ramp[2*i]; }
-        router.FifoPush(reinterpret_cast<BYTE*>(ramp), 32, false);
-        float out[32]{};
-        Check(router.FifoResample(reinterpret_cast<BYTE*>(out), 16, 1.001) == 16, "resample wrapped FIFO");
-        for (int i=0; i<16; ++i) {
-            Check(std::abs(out[2*i] - (1+i*1.001)/100) < 1e-6, "fractional sample position");
-            Check(out[2*i] == -out[2*i+1], "stereo phase locked");
-        }
-        Check(router.m_fifoBytes / 8 == 16, "source frames consumed");
-        Check(router.FifoResample(reinterpret_cast<BYTE*>(out), 16, 0.999) < 16, "lookahead prevents overread");
-        CoTaskMemFree(router.m_renderFormat); router.m_renderFormat = nullptr;
-        WAVEFORMATEX pcm{WAVE_FORMAT_PCM, 2, 48000, 192000, 4, 16, 0};
-        router.m_renderFormat = CloneWaveFormat(&pcm);
-        router.FifoReset(4, 48000);
-        router.m_fifoHead = router.m_fifo.size() - 12;
-        int16_t pcmIn[64], pcmOut[32]{};
-        for (int i=0; i<32; ++i) { pcmIn[2*i] = int16_t(i*100); pcmIn[2*i+1] = int16_t(-i*100); }
-        router.FifoPush(reinterpret_cast<BYTE*>(pcmIn), 32, false);
-        Check(router.FifoResample(reinterpret_cast<BYTE*>(pcmOut), 16, 0.999) == 16, "PCM16 resample wrapped FIFO");
-        for (int i=0; i<16; ++i) {
-            Check(std::abs(pcmOut[2*i] - (1+i*0.999)*100) <= 1, "PCM16 interpolation rounding");
-            Check(pcmOut[2*i] == -pcmOut[2*i+1], "PCM16 channel phase");
-        }
-        CoTaskMemFree(router.m_renderFormat); router.m_renderFormat = nullptr;
+        // Native stereo PCM16 -> float32 at a different sample rate, ring wrap.
+        WAVEFORMATEX pcm{WAVE_FORMAT_PCM,2,48000,192000,4,16,0};
+        WAVEFORMATEX wave{WAVE_FORMAT_IEEE_FLOAT,2,44100,352800,8,32,0};
+        router.m_captureFormat=CloneWaveFormat(&pcm);
+        router.m_renderFormat=CloneWaveFormat(&wave);
+        router.m_conversionReady=router.PrepareConversion();
+        Check(router.m_conversionReady,"native PCM16 to float32 conversion prepared");
+        Check(router.FifoReset(4,48000),"native FIFO reset");
+        router.m_fifoHead=router.m_fifo.size()-20;
+        std::vector<int16_t> input(2048*2);
+        for (int i=0;i<2048;++i) { input[2*i]=int16_t(12000*std::sin(i*0.01)); input[2*i+1]=-input[2*i]; }
+        router.FifoPush(reinterpret_cast<BYTE*>(input.data()),2048,false);
+        std::vector<float> out(1000*2);
+        Check(router.FifoResample(reinterpret_cast<BYTE*>(out.data()),1000,48000.0/44100)==1000,"different-rate wrapped FIFO");
+        for (int i=0;i<1000;++i) Check(std::abs(out[2*i]+out[2*i+1])<1e-6,"stereo phase locked");
+        Check(router.m_fifoBytes/4==2048-1088,"source-rate frame accounting");
+        Check(router.FifoResample(reinterpret_cast<BYTE*>(out.data()),1000,48000.0/44100)<1000,"FIR lookahead prevents overread");
+        // Post-pump telemetry uses each endpoint's own rate, subtracting FIR history.
+        router.m_fifoBytes=(480+router.m_sinc.History())*4;
+        router.PublishQueue(441);
+        const uint64_t snapshot=router.QueueSnapshotUs();
+        Check((snapshot>>32)==10000 && uint32_t(snapshot)==10000,"coherent different-rate occupancy");
+        // Partition invariance: packet boundaries cannot reset filter phase/history.
+        const auto render=[&](bool split) {
+            router.FifoReset(4,48000);
+            router.FifoPush(reinterpret_cast<BYTE*>(input.data()),2048,false);
+            std::vector<float> result(1000*2);
+            if (!split) Check(router.FifoResample(reinterpret_cast<BYTE*>(result.data()),1000,1.001)==1000,"continuous resample");
+            else for (unsigned i=0;i<1000;i+=100)
+                Check(router.FifoResample(reinterpret_cast<BYTE*>(result.data()+2*i),100,1.001)==100,"partitioned resample");
+            return result;
+        };
+        const auto whole=render(false), parts=render(true);
+        for (size_t i=0;i<whole.size();++i) Check(std::abs(whole[i]-parts[i])<1e-6,"continuous FIR phase across calls");
+        CoTaskMemFree(router.m_captureFormat); router.m_captureFormat=nullptr;
+        CoTaskMemFree(router.m_renderFormat); router.m_renderFormat=nullptr;
         router.SetLatency(-10, 999, false);
         Check(router.m_fifoTargetMs == 3 && router.m_renderQueueTargetMs == 100 && !router.m_driftEnabled,
               "latency setter clamps all entry points");
