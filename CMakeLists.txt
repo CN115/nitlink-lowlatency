@@ -167,6 +167,10 @@ add_dependencies(NitLink NitLinkRuntimeResources)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(NitLinkAudioConversionTests tests/audio_conversion_tests.cpp)
+    target_include_directories(NitLinkAudioConversionTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME audio_native_conversion COMMAND NitLinkAudioConversionTests)
+
     add_executable(NitLinkAudioDriftTests tests/audio_drift_tests.cpp)
     target_include_directories(NitLinkAudioDriftTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME audio_clock_drift COMMAND NitLinkAudioDriftTests)
