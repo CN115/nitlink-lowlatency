@@ -427,6 +427,140 @@ bool AudioRouter::SetupCapture()
     return true;
 }
 
+struct ExclusiveResult {
+    HRESULT hr = E_NOTIMPL;
+    const wchar_t* stage = L"activate exclusive client";
+    REFERENCE_TIME minimum = 0, requested = 0;
+    UINT32 frames = 0;
+    bool aligned = false;
+};
+
+// A failed Initialize client is discarded before the alignment retry.
+static bool OpenExclusive(IMMDevice* device, const WAVEFORMATEX* format, HANDLE event,
+                          ComPtr<IAudioClient>& client, ExclusiveResult& d) {
+    const auto step=[&](HRESULT hr, const wchar_t* stage) { d.hr=hr; d.stage=stage; return SUCCEEDED(hr); };
+    const auto activate=[&]() {
+        return device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,
+            reinterpret_cast<void**>(client.ReleaseAndGetAddressOf()));
+    };
+    if (!step(activate(),L"activate exclusive client")) return false;
+    REFERENCE_TIME normal=0;
+    if (!step(client->GetDevicePeriod(&normal,&d.minimum),L"query exclusive minimum")) return false;
+    if (d.minimum<=0 || d.minimum>2*REFTIMES_PER_SEC)
+        return step(E_INVALIDARG,L"invalid exclusive minimum");
+    d.requested=d.minimum;
+    HRESULT hr=client->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE,AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+        d.requested,d.requested,format,nullptr);
+    if (hr==AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
+        UINT32 alignedFrames=0;
+        if (!step(client->GetBufferSize(&alignedFrames),L"query aligned exclusive buffer")) return false;
+        if (!alignedFrames || alignedFrames>format->nSamplesPerSec*2)
+            return step(E_INVALIDARG,L"invalid aligned exclusive buffer");
+        // Round to the nearest 100 ns, as required by the WASAPI alignment recipe.
+        d.requested=REFERENCE_TIME((uint64_t(alignedFrames)*REFTIMES_PER_SEC+format->nSamplesPerSec/2)/format->nSamplesPerSec);
+        d.requested=std::max(d.minimum,d.requested);
+        d.aligned=true;
+        if (!step(activate(),L"reactivate aligned exclusive client")) return false;
+        hr=client->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE,AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            d.requested,d.requested,format,nullptr);
+    }
+    if (!step(hr,L"initialize exclusive minimum")) return false;
+    if (!step(client->SetEventHandle(event),L"set exclusive event")) return false;
+    if (!step(client->GetBufferSize(&d.frames),L"query exclusive buffer")) return false;
+    if (!d.frames || d.frames>format->nSamplesPerSec*2)
+        return step(E_INVALIDARG,L"invalid exclusive buffer size");
+    return true;
+}
+
+bool AudioRouter::SetupExclusive(IMMDevice* device, const WAVEFORMATEX* native, std::wstring& failure) {
+    ExclusiveResult d;
+    const auto fail=[&](HRESULT hr,const wchar_t* stage) {
+        std::wstringstream text;
+        text << stage << L" " << HrString(hr);
+        if (d.minimum) text << L" | exclusive min " << d.minimum/10000.0 << L" ms";
+        if (d.requested) text << L", requested " << d.requested/10000.0 << L" ms";
+        failure=text.str(); return false;
+    };
+    ComPtr<IAudioClient> probe;
+    HRESULT hr=device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,
+        reinterpret_cast<void**>(probe.GetAddressOf()));
+    if (FAILED(hr)) return fail(hr,L"activate exclusive format probe");
+    std::vector<WAVEFORMATEXTENSIBLE> candidates;
+    const auto append=[&](const WAVEFORMATEX* fmt) {
+        if (!ValidWaveFormat(fmt)) return;
+        const double ratio=double(m_captureFormat->nSamplesPerSec)/fmt->nSamplesPerSec;
+        if (ratio<0.125 || ratio>8 || !AudioConvert::CanMap(PcmDescription(m_captureFormat),PcmDescription(fmt))) return;
+        WAVEFORMATEXTENSIBLE copy{};
+        memcpy(&copy,fmt,sizeof(WAVEFORMATEX)+fmt->cbSize);
+        candidates.push_back(copy);
+    };
+    append(native); append(m_captureFormat);
+    // Shared mix formats are often float even when the hardware only accepts PCM.
+    for (DWORD rate : std::array<DWORD,5>{native->nSamplesPerSec,m_captureFormat->nSamplesPerSec,48000,44100,96000}) {
+        for (WORD channels : {native->nChannels,WORD(2)}) {
+            for (WORD bits : {WORD(32),WORD(24),WORD(16)}) {
+                for (WORD valid : {bits,WORD(24)}) {
+                    if (valid>bits || (valid!=bits && bits!=32)) continue;
+                    WAVEFORMATEXTENSIBLE fmt{};
+                    fmt.Format={WAVE_FORMAT_EXTENSIBLE,channels,rate,rate*channels*(bits/8),WORD(channels*(bits/8)),bits,22};
+                    fmt.Samples.wValidBitsPerSample=valid;
+                    fmt.dwChannelMask=channels==2 ? 3 : PcmDescription(native).mask;
+                    fmt.SubFormat=kSubtypePcm;
+                    append(&fmt.Format);
+                    if (valid==bits && channels<=2) {
+                        fmt.Format.wFormatTag=WAVE_FORMAT_PCM; fmt.Format.cbSize=0;
+                        append(&fmt.Format);
+                    }
+                }
+            }
+        }
+    }
+    const WAVEFORMATEX* chosen=nullptr;
+    for (const auto& candidate : candidates) {
+        hr=probe->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE,&candidate.Format,nullptr);
+        if (hr==S_OK) { chosen=&candidate.Format; break; }
+        if (hr!=AUDCLNT_E_UNSUPPORTED_FORMAT && hr!=S_FALSE)
+            return fail(hr,L"probe exclusive format");
+    }
+    if (!chosen) return fail(AUDCLNT_E_UNSUPPORTED_FORMAT,L"no convertible exclusive PCM format");
+    probe.Reset();
+    if (!OpenExclusive(device,chosen,m_renderEvent,m_renderClient,d)) return fail(d.hr,d.stage);
+    m_renderFormat=CloneWaveFormat(chosen);
+    if (!m_renderFormat) return fail(E_OUTOFMEMORY,L"copy exclusive format");
+    m_renderBufferFrames=m_renderPeriodFrames=d.frames;
+    hr=m_renderClient->GetService(IID_PPV_ARGS(&m_renderService));
+    if (FAILED(hr)) return fail(hr,L"get exclusive render service");
+    m_conversionReady=PrepareConversion();
+    if (!m_conversionReady) return fail(E_FAIL,L"prepare exclusive conversion");
+    m_fifoHead=m_fifoBytes=0; m_fifoPrimed=false; ResetDrift();
+    // Prime one WHOLE ping-pong buffer before Start, without consuming stale FIFO.
+    BYTE* data=nullptr;
+    hr=m_renderService->GetBuffer(m_renderBufferFrames,&data);
+    if (FAILED(hr)) return fail(hr,L"prime exclusive buffer");
+    hr=m_renderService->ReleaseBuffer(m_renderBufferFrames,AUDCLNT_BUFFERFLAGS_SILENT);
+    if (FAILED(hr)) return fail(hr,L"release exclusive prime");
+    ResetEvent(m_renderEvent);
+    hr=m_renderClient->Start();
+    if (FAILED(hr)) return fail(hr,L"start exclusive stream");
+    m_lastRenderEvent=std::chrono::steady_clock::now();
+    m_periodUs=UINT32(uint64_t(d.frames)*1000000/chosen->nSamplesPerSec);
+    m_effectiveQueueUs=m_periodUs.load();
+    m_adaptiveSupported=true; m_exclusiveActive=true;
+    REFERENCE_TIME latency=0;
+    const HRESULT latencyHr=m_renderClient->GetStreamLatency(&latency);
+    std::wstringstream status;
+    status << L"Exclusive event | exclusive min " << d.minimum/10000.0
+           << L" ms | requested " << d.requested/10000.0 << L" ms"
+           << L" | actual block " << m_periodUs.load()/1000.0 << L" ms (" << d.frames << L" frames)"
+           << (d.aligned ? L" | driver alignment applied" : L"")
+           << L" | driver stream latency ";
+    if (SUCCEEDED(latencyHr)) status << latency/10000.0 << L" ms"; else status << L"unknown";
+    status << L" | capture " << DescribeFormat(m_captureFormat) << L" -> stream " << DescribeFormat(chosen);
+    { std::lock_guard<std::mutex> lock(m_endpointInfoMutex); m_endpointInfo=status.str(); }
+    AudioLog(status.str());
+    return true;
+}
+
 bool AudioRouter::SetupRender()
 {
     ComPtr<IMMDevice> device;
@@ -444,6 +578,21 @@ bool AudioRouter::SetupRender()
     if (FAILED(hr) || !ValidWaveFormat(native)) { CoTaskMemFree(native); return false; }
     const auto freeNative=[](WAVEFORMATEX* p) { CoTaskMemFree(p); };
     std::unique_ptr<WAVEFORMATEX,decltype(freeNative)> nativeOwner(native,freeNative);
+    std::wstring exclusiveFailure;
+    if (m_exclusiveRequested.load()) {
+        if (m_failedExclusiveDeviceId!=m_renderDeviceId) m_exclusiveFailure.clear();
+        exclusiveFailure=m_exclusiveFailure;
+        if (exclusiveFailure.empty()) {
+            // Release the mix-format query client before taking exclusive access.
+            m_renderClient.Reset();
+            if (SetupExclusive(device.Get(),native,exclusiveFailure)) return true;
+            const auto deviceId=m_renderDeviceId;
+            TeardownRender(); // release a partly initialized exclusive stream before shared fallback
+            m_renderDeviceId=deviceId;
+            if (FAILED(activate())) return false;
+        }
+        AudioLog(L"Exclusive fallback: "+exclusiveFailure);
+    }
     const double rateRatio=double(m_captureFormat->nSamplesPerSec)/native->nSamplesPerSec;
     const bool nativeConvertible=AudioConvert::CanMap(PcmDescription(m_captureFormat),PcmDescription(native)) &&
         rateRatio>=0.125 && rateRatio<=8;
@@ -502,6 +651,7 @@ bool AudioRouter::SetupRender()
            << L" ms, default " << (probe.normal ? std::to_wstring(double(probe.normal)*1000/native->nSamplesPerSec) : L"unknown")
            << L" ms | actual " << m_periodUs.load()/1000.0 << L" ms"
            << L" | capture " << DescribeFormat(m_captureFormat) << L" -> stream " << DescribeFormat(m_renderFormat);
+    if (!exclusiveFailure.empty()) status << L" | exclusive fallback: " << exclusiveFailure;
     if (!lowPeriod) status << L" | fallback: " << probe.stage << L" " << HrString(probe.hr);
     { std::lock_guard<std::mutex> lock(m_endpointInfoMutex); m_endpointInfo=status.str(); }
     AudioLog(status.str());
@@ -545,6 +695,7 @@ void AudioRouter::TeardownRender()
     m_periodUs = 0;
     m_adaptiveSupported = false;
     m_conversionReady = false;
+    m_exclusiveActive = false;
     m_queueSnapshot = 0; m_effectiveQueueUs = 0;
     m_fifoAverageUs = 0; m_fifoMinUs = 0; m_fifoMaxUs = 0;
     { std::lock_guard<std::mutex> lock(m_endpointInfoMutex); m_endpointInfo=L"Waiting for playback endpoint"; }
@@ -581,6 +732,7 @@ bool AudioRouter::EnsureEndpoints()
         TeardownCapture();
         TeardownRender();
     }
+    if (m_retryExclusive.exchange(false)) m_exclusiveFailure.clear();
     if (m_restartRender.exchange(false)) {
         TeardownRender();
     }
@@ -633,6 +785,12 @@ void AudioRouter::HandleStreamError(HRESULT hr, const wchar_t* what, bool captur
     AudioLog(std::wstring(what) + L" failed " + HrString(hr) +
              (fatal ? L"; rebuilding endpoint" : L""));
 
+    if (!captureSide && m_exclusiveActive.load()) {
+        m_exclusiveFailure=std::wstring(what)+L" "+HrString(hr);
+        m_failedExclusiveDeviceId=m_renderDeviceId;
+        m_restartRender=true;
+        return;
+    }
     if (!fatal) return;
     if (captureSide) m_restartCapture = true;
     else             m_restartRender = true;
@@ -685,9 +843,9 @@ void AudioRouter::RouteLoop()
         m_streaming = true;
 
         // Sleep until either endpoint has something to do, or the stop event
-        // fires. Both sides are serviced on every wake, whichever event set
-        // it: capture may have queued more than one packet, and the render
-        // side is topped up from the FIFO regardless of which clock ticked.
+        // fires. Always drain capture. Shared output may be topped up on
+        // either wake; exclusive output writes exactly one full block only
+        // when its own render event is signaled.
         HANDLE waits[3] = { m_stopEvent, m_captureEvent, m_renderEvent };
         const DWORD wake = WaitForMultipleObjects(3, waits, FALSE, kPumpWaitMs);
         if (wake == WAIT_OBJECT_0) break;
@@ -697,7 +855,15 @@ void AudioRouter::RouteLoop()
             continue;
         }
         if (!DrainCapture()) continue;
-        if (!FillRender())   continue;
+        const bool renderReady=wake==WAIT_OBJECT_0+2;
+        if (m_exclusiveActive.load()) {
+            if (renderReady) m_lastRenderEvent=std::chrono::steady_clock::now();
+            else if (std::chrono::steady_clock::now()-m_lastRenderEvent>std::chrono::seconds(2)) {
+                HandleStreamError(HRESULT_FROM_WIN32(ERROR_TIMEOUT),L"exclusive render event timeout",false);
+                continue;
+            }
+        }
+        if (!FillRender(renderReady)) continue;
         LogStatsIfDue();
     }
 
@@ -888,17 +1054,23 @@ void AudioRouter::PublishQueue(UINT32 padding) {
     }
 }
 
-bool AudioRouter::FillRender()
+bool AudioRouter::FillRender(bool renderReady)
 {
     if (!m_bytesPerFrame || !m_samplesPerSec || !m_renderFormat) return true;
+    const bool exclusive=m_exclusiveActive.load();
+    // Capture notifications/timeouts must never write an exclusive ping-pong buffer.
+    if (exclusive && !renderReady) return true;
     UINT32 padding=0;
-    HRESULT hr=m_renderClient->GetCurrentPadding(&padding);
-    if (FAILED(hr)) { HandleStreamError(hr,L"GetCurrentPadding",false); return false; }
+    HRESULT hr=S_OK;
+    if (!exclusive) {
+        hr=m_renderClient->GetCurrentPadding(&padding);
+        if (FAILED(hr)) { HandleStreamError(hr,L"GetCurrentPadding",false); return false; }
+    }
     const UINT32 renderRate=m_renderFormat->nSamplesPerSec;
     const double baseRatio=double(m_samplesPerSec)/renderRate;
     const auto sourceFrames=[this](int ms) { return UINT32(uint64_t(m_samplesPerSec)*ms/1000); };
     const auto renderFrames=[renderRate](int ms) { return UINT32(uint64_t(renderRate)*ms/1000); };
-    const UINT32 queue=std::min(m_renderBufferFrames,std::max(renderFrames(m_renderQueueTargetMs.load()),
+    const UINT32 queue=exclusive ? m_renderBufferFrames : std::min(m_renderBufferFrames,std::max(renderFrames(m_renderQueueTargetMs.load()),
         m_renderPeriodFrames+renderFrames(1)));
     m_effectiveQueueUs=UINT32(uint64_t(queue)*1000000/renderRate);
     if (padding>=queue) { PublishQueue(padding); return true; }
@@ -919,7 +1091,15 @@ bool AudioRouter::FillRender()
         }
     }
     if (!m_fifoPrimed) {
-        if (fill<history+reserve+need) { PublishQueue(padding); return true; }
+        if (fill<history+reserve+need) {
+            if (exclusive) {
+                BYTE* silent=nullptr;
+                hr=m_renderService->GetBuffer(want,&silent);
+                if (SUCCEEDED(hr)) hr=m_renderService->ReleaseBuffer(want,AUDCLNT_BUFFERFLAGS_SILENT);
+                if (FAILED(hr)) { HandleStreamError(hr,L"exclusive priming silence",false); return false; }
+            }
+            PublishQueue(exclusive ? queue : padding); return true;
+        }
         m_fifoPrimed=true; ResetDrift();
     }
     const auto now=std::chrono::steady_clock::now();
@@ -960,11 +1140,21 @@ bool AudioRouter::FillRender()
     if (FAILED(hr)) { HandleStreamError(hr,L"render ReleaseBuffer",false); return false; }
     m_winOut+=want;
     // Refresh actual padding after release, rather than reporting the target.
-    hr=m_renderClient->GetCurrentPadding(&padding);
-    if (FAILED(hr)) { HandleStreamError(hr,L"post-render padding",false); return false; }
-    PublishQueue(padding);
+    if (!exclusive) {
+        hr=m_renderClient->GetCurrentPadding(&padding);
+        if (FAILED(hr)) { HandleStreamError(hr,L"post-render padding",false); return false; }
+    }
+    // In exclusive mode this is the submitted block size, NOT measured padding.
+    PublishQueue(exclusive ? want : padding);
     m_winFillMin=std::min(m_winFillMin,m_fillMs.load()); m_winFillMax=std::max(m_winFillMax,m_fillMs.load());
     return true;
+}
+
+void AudioRouter::SetExclusive(bool enabled) {
+    if (m_exclusiveRequested.exchange(enabled)!=enabled) {
+        m_retryExclusive=true;
+        m_restartRender=true;
+    }
 }
 
 void AudioRouter::SetLatency(int fifoMs, int renderMs, bool drift) {
