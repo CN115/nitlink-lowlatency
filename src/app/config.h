@@ -81,6 +81,7 @@ struct Config {
     int          audioFifoMs       = 12;
     int          audioRenderMs     = 10;
     bool         audioDrift        = true;
+    bool         audioExclusive    = false;
 
     // Capture
     std::wstring preferredDevice = L""; // Empty = first available
