@@ -381,6 +381,7 @@ bool Config::Load(const std::string& path)
         if (key == "audio_fifo_ms")   audioFifoMs = ParseI32(val, audioFifoMs, 3, 100);
         if (key == "audio_render_ms") audioRenderMs = ParseI32(val, audioRenderMs, 3, 100);
         if (key == "audio_drift")     audioDrift = ParseBool(val);
+        if (key == "audio_exclusive") audioExclusive = ParseBool(val);
         if (key == "audio_muted")     audioMuted   = ParseBool(val);
         if (key == "color_expansion") colorExpansion = ParseBool(val);
         if (key == "nis_enabled")     nisEnabled   = ParseBool(val);
@@ -588,6 +589,7 @@ bool Config::Save(const std::string& path)
     file << "audio_fifo_ms = " << std::clamp(audioFifoMs, 3, 100) << "\n";
     file << "audio_render_ms = " << std::clamp(audioRenderMs, 3, 100) << "\n";
     file << "audio_drift = " << (audioDrift ? "true" : "false") << "\n";
+    file << "audio_exclusive = " << (audioExclusive ? "true" : "false") << "\n";
     file << "audio_volume = " << audioVolume << "\n";
     file << "audio_muted = "  << (audioMuted ? "true" : "false") << "\n\n";
 
