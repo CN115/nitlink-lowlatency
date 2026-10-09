@@ -44,6 +44,27 @@ struct AudioRouterTestAccess {
         const auto size = router.m_fifoBytes;
         router.FifoPush(nullptr, 2, false);
         Check(size == router.m_fifoBytes, "null data not copied");
+        // Interleaved stereo ramp across ring wrap; both channels share phase.
+        router.FifoReset(8, 48000);
+        WAVEFORMATEX wave{WAVE_FORMAT_IEEE_FLOAT, 2, 48000, 384000, 8, 32, 0};
+        router.m_renderFormat = CloneWaveFormat(&wave);
+        const size_t capacity = router.m_fifo.size() / 8;
+        router.m_fifoHead = (capacity - 4) * 8;
+        float ramp[64];
+        for (int i=0; i<32; ++i) { ramp[2*i] = i / 100.0f; ramp[2*i+1] = -ramp[2*i]; }
+        router.FifoPush(reinterpret_cast<BYTE*>(ramp), 32, false);
+        float out[32]{};
+        Check(router.FifoResample(reinterpret_cast<BYTE*>(out), 16, 1.001) == 16, "resample wrapped FIFO");
+        for (int i=0; i<16; ++i) {
+            Check(std::abs(out[2*i] - (1+i*1.001)/100) < 1e-6, "fractional sample position");
+            Check(out[2*i] == -out[2*i+1], "stereo phase locked");
+        }
+        Check(router.m_fifoBytes / 8 == 16, "source frames consumed");
+        Check(router.FifoResample(reinterpret_cast<BYTE*>(out), 16, 0.999) < 16, "lookahead prevents overread");
+        CoTaskMemFree(router.m_renderFormat); router.m_renderFormat = nullptr;
+        router.SetLatency(-10, 999, false);
+        Check(router.m_fifoTargetMs == 3 && router.m_renderQueueTargetMs == 100 && !router.m_driftEnabled,
+              "latency setter clamps all entry points");
         router.SetVolume(0.5f); router.SetVolume(NAN);
         Check(router.m_volume == 0.5f, "NaN volume ignored");
     }
