@@ -111,7 +111,7 @@ window.NitLinkLocales['en-US'] = {
   'row.mute': 'Mute',
   'row.captureGain': 'Capture Gain',
   'tooltip.mute': 'Silences the capture playback bus.',
-  'tooltip.captureGain': 'WASAPI playback volume. Keep at 100 for bit-perfect digital capture.',
+  'tooltip.captureGain': 'WASAPI playback volume. 100 means unity gain; adaptive drift correction may resample the audio.',
   'section.shortcuts': 'Shortcuts',
   'section.globalCapturing': 'Global while capturing',
   'shortcut.settings': 'Settings',
