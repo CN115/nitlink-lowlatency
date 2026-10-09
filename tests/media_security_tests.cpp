@@ -62,6 +62,19 @@ struct AudioRouterTestAccess {
         Check(router.m_fifoBytes / 8 == 16, "source frames consumed");
         Check(router.FifoResample(reinterpret_cast<BYTE*>(out), 16, 0.999) < 16, "lookahead prevents overread");
         CoTaskMemFree(router.m_renderFormat); router.m_renderFormat = nullptr;
+        WAVEFORMATEX pcm{WAVE_FORMAT_PCM, 2, 48000, 192000, 4, 16, 0};
+        router.m_renderFormat = CloneWaveFormat(&pcm);
+        router.FifoReset(4, 48000);
+        router.m_fifoHead = router.m_fifo.size() - 12;
+        int16_t pcmIn[64], pcmOut[32]{};
+        for (int i=0; i<32; ++i) { pcmIn[2*i] = int16_t(i*100); pcmIn[2*i+1] = int16_t(-i*100); }
+        router.FifoPush(reinterpret_cast<BYTE*>(pcmIn), 32, false);
+        Check(router.FifoResample(reinterpret_cast<BYTE*>(pcmOut), 16, 0.999) == 16, "PCM16 resample wrapped FIFO");
+        for (int i=0; i<16; ++i) {
+            Check(std::abs(pcmOut[2*i] - (1+i*0.999)*100) <= 1, "PCM16 interpolation rounding");
+            Check(pcmOut[2*i] == -pcmOut[2*i+1], "PCM16 channel phase");
+        }
+        CoTaskMemFree(router.m_renderFormat); router.m_renderFormat = nullptr;
         router.SetLatency(-10, 999, false);
         Check(router.m_fifoTargetMs == 3 && router.m_renderQueueTargetMs == 100 && !router.m_driftEnabled,
               "latency setter clamps all entry points");
