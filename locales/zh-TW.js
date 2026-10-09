@@ -1,6 +1,11 @@
 // NitLink Traditional Chinese (Taiwan) UI resource.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['zh-TW'] = {
+  'audio.requested': "設定播放佇列",
+  'audio.effective': "有效目標",
+  'audio.afterPump': "處理後佔用，非端到端延遲",
+  'audio.average': "一秒平均／範圍",
+  'audio.driftOn': "漂移補償開啟",
   'audio.latencyTitle': "音訊低延遲實驗室",
   'audio.fifo': "擷取 FIFO 目標",
   'audio.render': "播放佇列目標",
