@@ -30,6 +30,11 @@ int main() {
     Expect(driftOn && driftOn->number == 1 && driftOff && driftOff->number == 0, "drift boolean preserved");
     Expect(!ParseSettingsMessage(L"{\"action\":\"setAudioDrift\",\"value\":1}"), "drift rejects numeric toggle");
 
+    const auto exclusiveOn = ParseSettingsMessage(L"{\"action\":\"setAudioExclusive\",\"value\":true}");
+    const auto exclusiveOff = ParseSettingsMessage(L"{\"action\":\"setAudioExclusive\",\"value\":false}");
+    Expect(exclusiveOn && exclusiveOn->number==1 && exclusiveOff && exclusiveOff->number==0,"exclusive boolean round trip");
+    Expect(!ParseSettingsMessage(L"{\"action\":\"setAudioExclusive\",\"value\":1}"),"exclusive numeric toggle rejected");
+
     for (int kind = COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
          kind <= COREWEBVIEW2_PROCESS_FAILED_KIND_UNKNOWN_PROCESS_EXITED; ++kind)
         Expect(NitLink::SettingsProcessNeedsRestart(static_cast<COREWEBVIEW2_PROCESS_FAILED_KIND>(kind)) ==
