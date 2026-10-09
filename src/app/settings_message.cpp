@@ -192,7 +192,7 @@ std::optional<SettingsMessage> ParseSettingsMessage(std::wstring_view json) {
         if (!value || value->kind != Value::Kind::Number || value->number < 3 ||
             value->number > 100 || std::floor(value->number) != value->number) return std::nullopt;
         result.number = value->number;
-    } else if (action == L"setAudioDrift") {
+    } else if (action == L"setAudioDrift" || action == L"setAudioExclusive") {
         if (!value || value->kind != Value::Kind::Boolean) return std::nullopt;
         result.number = value->boolean ? 1 : 0;
     } else if (action == L"setVolume" || action == L"setPiPOpacity") {
