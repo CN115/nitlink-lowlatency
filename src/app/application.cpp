@@ -1111,6 +1111,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
 
     m_audioRouter = std::make_unique<AudioRouter>();
     m_audioRouter->SetLatency(m_config->audioFifoMs, m_config->audioRenderMs, m_config->audioDrift);
+    m_audioRouter->SetExclusive(m_config->audioExclusive);
     // Route audio from the selected capture card to the default playback device.
     //
     // Pass the selected video device's full name as the audio endpoint hint
@@ -1314,11 +1315,13 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             m_config->Save("nitlink.json");
             return;
         }
-        if ((action == L"setAudioFifoMs" || action == L"setAudioRenderMs" || action == L"setAudioDrift") && m_config && m_audioRouter) {
+        if ((action == L"setAudioFifoMs" || action == L"setAudioRenderMs" || action == L"setAudioDrift" || action == L"setAudioExclusive") && m_config && m_audioRouter) {
             if (action == L"setAudioFifoMs") m_config->audioFifoMs = static_cast<int>(message->number);
             if (action == L"setAudioRenderMs") m_config->audioRenderMs = static_cast<int>(message->number);
             if (action == L"setAudioDrift") m_config->audioDrift = message->number != 0;
+            if (action == L"setAudioExclusive") m_config->audioExclusive = message->number != 0;
             m_audioRouter->SetLatency(m_config->audioFifoMs, m_config->audioRenderMs, m_config->audioDrift);
+            m_audioRouter->SetExclusive(m_config->audioExclusive);
             m_config->Save("nitlink.json");
             PushSettingsState();
             return;
@@ -4923,7 +4926,9 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"audioFifoMs\":" << m_config->audioFifoMs << L",";
     js << L"\"audioRenderMs\":" << m_config->audioRenderMs << L",";
     js << L"\"audioDrift\":" << (m_config->audioDrift ? L"true" : L"false") << L",";
+    js << L"\"audioExclusive\":" << (m_config->audioExclusive ? L"true" : L"false") << L",";
     if (m_audioRouter) {
+        js << L"\"audioExclusiveActive\":" << (m_audioRouter->ExclusiveActive() ? L"true" : L"false") << L",";
         const uint64_t audioQueues=m_audioRouter->QueueSnapshotUs();
         js << L"\"audioFillMs\":" << (audioQueues >> 32) / 1000.0 << L",";
         js << L"\"audioQueueMs\":" << static_cast<uint32_t>(audioQueues) / 1000.0 << L",";
