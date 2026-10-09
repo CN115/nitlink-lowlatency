@@ -2,6 +2,11 @@
 // language for every locale and for every missing individual translation.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['en-US'] = {
+  'audio.requested': "Requested queue",
+  'audio.effective': "Effective target",
+  'audio.afterPump': "after pump, not end-to-end latency",
+  'audio.average': "1 s average / range",
+  'audio.driftOn': "Drift on",
   'audio.latencyTitle': "Audio latency lab",
   'audio.fifo': "Capture FIFO target",
   'audio.render': "Render queue target",
