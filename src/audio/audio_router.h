@@ -143,11 +143,9 @@ private:
     HANDLE m_stopEvent    = nullptr;
 
     // FIFO between the two endpoint clocks, in capture-format frames. The
-    // capture card and the playback device each run on their own clock, so
-    // over minutes one side outruns the other. The worker holds the fill
-    // near a target by slipping single frames, which is inaudible, instead
-    // of letting the render buffer drain (gaps) or overflow (dropped packet
-    // tails); both showed up as periodic stutter on USB cards.
+    // capture and playback clocks drift. A filtered PI controller steers
+    // near-unity cubic resampling for float32/PCM16; rare formats use
+    // filtered frame slips. All ring/phase/controller state is worker-owned.
     std::vector<BYTE> m_fifo;
     size_t   m_fifoHead      = 0;      // read offset, bytes
     size_t   m_fifoBytes     = 0;      // bytes held
