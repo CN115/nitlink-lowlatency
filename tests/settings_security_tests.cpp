@@ -18,6 +18,18 @@ void Expect(bool value, const char* label) {
 
 int main() {
     using NitLink::ParseSettingsMessage;
+    for (auto action : {L"setAudioFifoMs", L"setAudioRenderMs"}) {
+        const auto prefix = L"{\"action\":\"" + std::wstring(action) + L"\",\"value\":";
+        for (auto valid : {L"3", L"12", L"100"})
+            Expect(ParseSettingsMessage(prefix + valid + L"}").has_value(), "audio buffer valid integer");
+        for (auto invalid : {L"2", L"101", L"3.5", L"true", L"\"12\"", L"null", L"1e99"})
+            Expect(!ParseSettingsMessage(prefix + invalid + L"}"), "invalid audio buffer rejected");
+    }
+    const auto driftOn = ParseSettingsMessage(L"{\"action\":\"setAudioDrift\",\"value\":true}");
+    const auto driftOff = ParseSettingsMessage(L"{\"action\":\"setAudioDrift\",\"value\":false}");
+    Expect(driftOn && driftOn->number == 1 && driftOff && driftOff->number == 0, "drift boolean preserved");
+    Expect(!ParseSettingsMessage(L"{\"action\":\"setAudioDrift\",\"value\":1}"), "drift rejects numeric toggle");
+
     for (int kind = COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
          kind <= COREWEBVIEW2_PROCESS_FAILED_KIND_UNKNOWN_PROCESS_EXITED; ++kind)
         Expect(NitLink::SettingsProcessNeedsRestart(static_cast<COREWEBVIEW2_PROCESS_FAILED_KIND>(kind)) ==
