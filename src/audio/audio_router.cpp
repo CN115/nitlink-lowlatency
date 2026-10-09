@@ -548,6 +548,7 @@ bool AudioRouter::SetupExclusive(IMMDevice* device, const WAVEFORMATEX* native, 
         return fail(E_ABORT,L"exclusive suspended before start (window inactive or closing)");
     hr=m_renderClient->Start();
     if (FAILED(hr)) return fail(hr,L"start exclusive stream");
+    SetupRenderClock();
     m_lastRenderEvent=std::chrono::steady_clock::now();
     m_periodUs=UINT32(uint64_t(d.frames)*1000000/chosen->nSamplesPerSec);
     m_effectiveQueueUs=m_periodUs.load();
@@ -590,6 +591,7 @@ bool AudioRouter::SetupRender()
         exclusiveFailure=m_exclusiveFailure;
         if (exclusiveFailure.empty()) {
             // Release the mix-format query client before taking exclusive access.
+            m_renderClock.Reset(); m_renderClockFrequency=0;
             m_renderClient.Reset();
             if (SetupExclusive(device.Get(),native,exclusiveFailure)) return true;
             const auto deviceId=m_renderDeviceId;
@@ -666,6 +668,7 @@ bool AudioRouter::SetupRender()
     AudioLog(status.str());
     m_fifoHead=m_fifoBytes=0; m_fifoPrimed=false;
     ResetDrift();
+    SetupRenderClock();
     hr=m_renderClient->Start();
     if (FAILED(hr)) { AudioLog(L"render Start failed "+HrString(hr)); return false; }
     return true;
@@ -697,6 +700,7 @@ void AudioRouter::TeardownRender()
 {
     if (m_renderClient) m_renderClient->Stop();
     m_renderService.Reset();
+    m_renderClock.Reset(); m_renderClockFrequency=0;
     m_renderClient.Reset();
     if (m_renderFormat) { CoTaskMemFree(m_renderFormat); m_renderFormat = nullptr; }
     m_renderBufferFrames = 0;
@@ -984,7 +988,8 @@ bool AudioRouter::DrainCapture()
         BYTE*  data   = nullptr;
         UINT32 frames = 0;
         DWORD  flags  = 0;
-        hr = m_captureService->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
+        UINT64 devicePosition=0, qpcPosition=0;
+        hr = m_captureService->GetBuffer(&data, &frames, &flags, &devicePosition, &qpcPosition);
         if (FAILED(hr)) { HandleStreamError(hr, L"capture GetBuffer", true); return false; }
         if (frames > m_captureBufferFrames || (!data && frames && !(flags & AUDCLNT_BUFFERFLAGS_SILENT))) {
             const HRESULT release = m_captureService->ReleaseBuffer(frames);
@@ -997,6 +1002,11 @@ bool AudioRouter::DrainCapture()
             ++m_resyncs;
             ResetDrift();
         }
+        if (flags & (AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR | AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY))
+            m_captureClockRate.Reset();
+        else if (frames)
+            m_captureClockRate.Sample(devicePosition, qpcPosition, m_samplesPerSec,
+                std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
         FifoPush(data, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
         m_winIn += frames;
         hr = m_captureService->ReleaseBuffer(frames);
@@ -1007,13 +1017,54 @@ bool AudioRouter::DrainCapture()
     return true;
 }
 
-void AudioRouter::ResetDrift() {
-    m_drift.Reset(); m_driftPpm=0; m_slipBudget=0;
+void AudioRouter::ResetDrift(bool preserveClock) {
+    if (preserveClock) m_drift.Reprime();
+    else {
+        m_drift.Reset(); m_driftPpm=0;
+        m_captureClockRate.Reset(); m_renderClockRate.Reset();
+        m_estimatedPpm=0; m_clockEstimateValid=false;
+        m_recoveryGuard.ClearWindow();
+    }
+    m_slipBudget=0;
     m_phase=m_conversionReady ? m_sinc.History() : 1.0;
     m_lastDrift=std::chrono::steady_clock::now();
     m_occupancyStart=m_occupancyLast=m_lastDrift;
     m_occupancyIntegral=m_occupancySeconds=0;
     m_occupancyPrevious=0; m_occupancyMin=UINT32_MAX; m_occupancyMax=0;
+}
+
+void AudioRouter::SetupRenderClock() {
+    m_renderClock.Reset(); m_renderClockFrequency=0;
+    if (FAILED(m_renderClient->GetService(IID_PPV_ARGS(&m_renderClock))) ||
+        !m_renderClock || FAILED(m_renderClock->GetFrequency(&m_renderClockFrequency)) ||
+        !m_renderClockFrequency) {
+        m_renderClock.Reset(); m_renderClockFrequency=0;
+    }
+}
+
+double AudioRouter::ReadClockEstimate(double now) {
+    if (m_renderClock) {
+        UINT64 position=0, qpc=0;
+        // S_FALSE reports an imprecise measurement; never feed it to the estimator.
+        if (m_renderClock->GetPosition(&position,&qpc)==S_OK)
+            m_renderClockRate.Sample(position,qpc,double(m_renderClockFrequency),now);
+    }
+    const bool valid=m_captureClockRate.Valid(now) && m_renderClockRate.Valid(now);
+    const double estimate=valid ? (m_captureClockRate.Rate()/m_renderClockRate.Rate()-1)*1e6 : 0;
+    m_clockEstimateValid=valid;
+    m_estimatedPpm=int(std::lround(estimate));
+    return valid ? std::clamp(estimate,-2000.0,2000.0) : 0;
+}
+
+void AudioRouter::ObserveRecovery(double now, double error, double missing, double block) {
+    if (!m_driftEnabled.load()) { m_recoveryGuard.ClearWindow(); return; }
+    if (m_recoveryGuard.Observe(now,error,missing,block)) {
+        ++m_automaticReloads;
+        // EnsureEndpoints rebuilds both clients on the next worker iteration.
+        // No fault latch: the preferred exclusive mode can be opened again.
+        m_restartCapture=true;
+        AudioLog(L"audio recovery threshold exceeded; reloading endpoints (10 s cooldown, FIFO target unchanged)");
+    }
 }
 
 UINT32 AudioRouter::FifoResample(BYTE* out, UINT32 frames, double ratio) {
@@ -1089,6 +1140,9 @@ bool AudioRouter::FillRender(bool renderReady)
     m_effectiveQueueUs=UINT32(uint64_t(queue)*1000000/renderRate);
     if (padding>=queue) { PublishQueue(padding); return true; }
     const UINT32 want=queue-padding;
+    const auto pumpNow=std::chrono::steady_clock::now();
+    const double nowSeconds=std::chrono::duration<double>(pumpNow.time_since_epoch()).count();
+    const double clockPpm=ReadClockEstimate(nowSeconds);
     UINT32 fill=UINT32(m_fifoBytes/m_bytesPerFrame);
     const UINT32 history=m_conversionReady ? m_sinc.History() : 0;
     const UINT32 lookahead=m_conversionReady ? m_sinc.Taps()-history : 0;
@@ -1097,11 +1151,12 @@ bool AudioRouter::FillRender(bool renderReady)
     const UINT32 need=UINT32(std::ceil(want*baseRatio*1.002))+lookahead+1;
     const UINT32 reserve=std::max(sourceFrames(m_fifoTargetMs.load()),lookahead+1);
     const double target=reserve+queue*baseRatio;
+    const double error=(double(fill)-history+padding*baseRatio-target)/m_samplesPerSec;
     if (double(fill)+padding*baseRatio>history+target+sourceFrames(std::max(20,m_fifoTargetMs.load()))) {
         const UINT32 keep=history+reserve+need;
         if (fill>keep) {
             const UINT32 drop=fill-keep; FifoSkip(drop); fill-=drop;
-            m_overrunFrames+=drop; m_winOverrun+=drop; ++m_resyncs; ResetDrift();
+            m_overrunFrames+=drop; m_winOverrun+=drop; ++m_resyncs; ResetDrift(true);
         }
     }
     if (!m_fifoPrimed) {
@@ -1114,12 +1169,12 @@ bool AudioRouter::FillRender(bool renderReady)
             }
             PublishQueue(exclusive ? queue : padding); return true;
         }
-        m_fifoPrimed=true; ResetDrift();
+        m_fifoPrimed=true; ResetDrift(true);
     }
     const auto now=std::chrono::steady_clock::now();
     const double dt=std::chrono::duration<double>(now-m_lastDrift).count(); m_lastDrift=now;
     const double ppm=m_driftEnabled.load() ? m_drift.Update(
-        (double(fill)-history+padding*baseRatio-target)/m_samplesPerSec,dt) : 0;
+        (double(fill)-history+padding*baseRatio-target)/m_samplesPerSec,dt,clockPpm) : 0;
     m_driftPpm=int(std::lround(ppm));
     BYTE* out=nullptr;
     hr=m_renderService->GetBuffer(want,&out);
@@ -1145,13 +1200,15 @@ bool AudioRouter::FillRender(bool renderReady)
         memset(out+size_t(written)*m_renderFormat->nBlockAlign,
             m_renderFormat->wBitsPerSample==8 ? 128 : 0,size_t(want-written)*m_renderFormat->nBlockAlign);
         m_underrunFrames+=want-written; m_winUnderrun+=want-written;
-        m_fifoPrimed=false; ResetDrift();
+        ++m_underrunEvents;
+        m_fifoPrimed=false; ResetDrift(true);
     }
     const bool silent=m_muted.load() || written==0;
     const float volume=m_volume.load();
     if (!silent && volume<0.999f) ScaleInPlace(out,want,m_renderFormat,volume);
     hr=m_renderService->ReleaseBuffer(want,silent ? AUDCLNT_BUFFERFLAGS_SILENT : 0);
     if (FAILED(hr)) { HandleStreamError(hr,L"render ReleaseBuffer",false); return false; }
+    ObserveRecovery(nowSeconds,error,double(want-written)/renderRate,double(want)/renderRate);
     m_winOut+=want;
     // Refresh actual padding after release, rather than reporting the target.
     if (!exclusive) {
@@ -1208,7 +1265,9 @@ void AudioRouter::LogStatsIfDue()
        << L"), in " << m_winIn << L", out " << m_winOut
        << L", underrun " << m_winUnderrun << L", overrun " << m_winOverrun
        << L", render " << m_queueMs.load() << L" ms, drift " << m_driftPpm.load()
-       << L" ppm, resync " << m_resyncs.load()
+       << L" ppm, estimate " << m_estimatedPpm.load() << L" ppm (valid " << m_clockEstimateValid.load()
+       << L"), underrun events " << m_underrunEvents.load() << L", automatic reloads " << m_automaticReloads.load()
+       << L", resync " << m_resyncs.load()
        << L", slip +" << m_winSlipDrop << L"/-" << m_winSlipDup;
     AudioLog(ss.str());
     m_winStart = now;

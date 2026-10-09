@@ -1,6 +1,12 @@
 // NitLink Simplified Chinese UI resource.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['zh-CN'] = {
+  "audio.clockEstimate": "时钟漂移估计",
+  "audio.clockLearning": "估计中／不可用",
+  "audio.underrunEvents": "欠载次数",
+  "audio.reloads": "自动重载次数",
+  "audio.recoveryHelp": "漂移补偿结合多个音频块的设备时钟估计和 FIFO 水位反馈；普通欠载保留估计。2 秒内欠载 3 次或累计缺失 20 毫秒音频，或水位偏差达到 20 毫秒（且不少于两个输出块）并持续 250 毫秒时，重载采集和播放端。重载冷却时间为 10 秒，FIFO 目标始终保持不变。关闭漂移补偿也会关闭阈值重载。",
+
   "audio.endpoint.0": "独占已暂停：窗口失焦、隐藏、最小化或正在恢复焦点",
   "audio.endpoint.1": "兼容共享模式（Windows 转换）",
   "audio.endpoint.2": "原生共享模式（低周期）",

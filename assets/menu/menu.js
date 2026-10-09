@@ -751,6 +751,8 @@
             : `${t('audio.requested')} ${ms(s.audioRenderMs)} ms → ${t('audio.effective')} ${ms(s.audioEffectiveMs)} ms\nFIFO ${ms(s.audioFillMs)} ms + ${t('audio.queued')} ${ms(s.audioQueueMs)} ms (${t('audio.afterPump')})\n`) +
           `FIFO ${t('audio.average')} ${ms(s.audioAverageMs)} ms [${ms(s.audioMinMs)}–${ms(s.audioMaxMs)}]\n` +
           `${t('audio.period')} ${ms(s.audioPeriodUs / 1000)} ms · ${t('audio.correction')} ${s.audioPpm} ppm\n` +
+          `${t('audio.clockEstimate')} ${s.audioClockValid ? s.audioEstimatedPpm + ' ppm' : t('audio.clockLearning')}\n` +
+          `${t('audio.underrunEvents')} ${s.audioUnderrunEvents ?? 0} · ${t('audio.reloads')} ${s.audioReloads ?? 0}\n` +
           `${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}\n` +
           localizeEndpointInfo(s.audioEndpointInfo);
       }

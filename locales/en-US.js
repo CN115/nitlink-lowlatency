@@ -2,6 +2,12 @@
 // language for every locale and for every missing individual translation.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['en-US'] = {
+  "audio.clockEstimate": "Clock estimate",
+  "audio.clockLearning": "Learning / unavailable",
+  "audio.underrunEvents": "Underrun events",
+  "audio.reloads": "Automatic reloads",
+  "audio.recoveryHelp": "Drift correction uses multi-block device clock estimates plus FIFO feedback. Ordinary underruns retain the estimate. Reload both audio endpoints after 3 underruns or 20 ms of missing audio within 2 s, or a queue error of at least 20 ms (and two output blocks) lasting 250 ms. Reload cooldown: 10 s. FIFO target never increases. Disabling drift correction also disables threshold reloads.",
+
   "audio.endpoint.0": "exclusive suspended: window inactive, hidden, minimized or regaining focus",
   "audio.endpoint.1": "Compatibility shared (Windows conversion)",
   "audio.endpoint.2": "Native shared low-period",

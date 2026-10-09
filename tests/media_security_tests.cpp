@@ -114,6 +114,31 @@ public:
 };
 namespace NitLink {
 struct AudioRouterTestAccess {
+    static void Recovery() {
+        AudioRouter router;
+        router.SetLatency(3,3,true);
+        router.m_restartCapture=false; router.m_restartRender=false;
+        for (int i=0;i<300;++i) {
+            router.m_captureClockRate.Sample(i*480,1000000000ULL+i*100000ULL,48000,i*.01);
+            router.m_renderClockRate.Sample(i*480,1000000000ULL+i*100000ULL,48000,i*.01);
+        }
+        router.ResetDrift(true);
+        Check(router.m_captureClockRate.Valid(2.99) && router.m_renderClockRate.Valid(2.99),
+            "ordinary re-prime preserves both clock estimates");
+        router.ObserveRecovery(0,0,.001,.003);
+        router.ObserveRecovery(.1,0,.001,.003);
+        Check(!router.m_restartCapture,"small isolated underruns keep endpoints alive");
+        router.ObserveRecovery(.2,0,.001,.003);
+        Check(router.m_restartCapture && router.AutomaticReloads()==1,"threshold schedules both endpoint rebuilds");
+        router.m_restartCapture=false; router.ResetDrift();
+        Check(!router.m_captureClockRate.Valid(2.99),"endpoint rebuild clears stale clock identity");
+        router.ObserveRecovery(1,.1,.03,.003);
+        Check(!router.m_restartCapture && router.AutomaticReloads()==1,"endpoint reset preserves recovery cooldown");
+        Check(router.m_fifoTargetMs==3 && router.m_renderQueueTargetMs==3,"recovery never changes either user buffer target");
+        router.m_driftEnabled=false;
+        router.ObserveRecovery(20,.1,.03,.003);
+        Check(!router.m_restartCapture,"drift disabled also disables automatic threshold reloads");
+    }
     static void Focus() {
         AudioRouter router;
         const auto t=ExclusiveFocusGate::Clock::now();
@@ -287,6 +312,7 @@ int main() {
         Check(ValidWaveFormat(&ext.Format), "24-bit extensible PCM supported");
         ext.Samples.wValidBitsPerSample = 32;
         Check(!ValidWaveFormat(&ext.Format), "invalid valid-bits field");
+        AudioRouterTestAccess::Recovery();
         AudioRouterTestAccess::Run();
 
         VIDEOINFOHEADER info{};

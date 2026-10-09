@@ -9,14 +9,18 @@ namespace NitLink {
 class DriftController {
 public:
     void Reset() { filtered_ = integral_ = ppm_ = 0; }
-    double Update(double errorSeconds, double dt) {
-        if (!std::isfinite(errorSeconds) || !std::isfinite(dt) || dt <= 0) return ppm_;
+    // A FIFO re-prime does not mean the device clocks changed. Discard the
+    // transient water-level error but retain learned feedback and correction.
+    void Reprime() { filtered_ = 0; }
+    double Update(double errorSeconds, double dt, double clockPpm = 0) {
+        if (!std::isfinite(errorSeconds) || !std::isfinite(dt) || !std::isfinite(clockPpm) || dt <= 0) return ppm_;
         dt = std::min(dt, 0.1);
+        clockPpm = std::clamp(clockPpm, -2000.0, 2000.0);
         filtered_ += (1 - std::exp(-dt)) * (errorSeconds - filtered_);
         const double next = std::clamp(integral_ + filtered_ * dt * 20000, -1500.0, 1500.0);
-        const double raw = filtered_ * 250000 + next;
+        const double raw = clockPpm + filtered_ * 250000 + next;
         if (std::abs(raw) < 2000 || raw * filtered_ < 0) integral_ = next;
-        const double target = std::clamp(filtered_ * 250000 + integral_, -2000.0, 2000.0);
+        const double target = std::clamp(clockPpm + filtered_ * 250000 + integral_, -2000.0, 2000.0);
         ppm_ += std::clamp(target - ppm_, -400 * dt, 400 * dt);
         return ppm_;
     }

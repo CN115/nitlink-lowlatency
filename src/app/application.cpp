@@ -4944,6 +4944,10 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
         js << L"\"audioEndpointInfo\":\"" << JsonEscapeWide(m_audioRouter->EndpointInfo()) << L"\",";
         js << L"\"audioPeriodUs\":" << m_audioRouter->RenderPeriodUs() << L",";
         js << L"\"audioPpm\":" << m_audioRouter->DriftPpm() << L",";
+        js << L"\"audioEstimatedPpm\":" << m_audioRouter->EstimatedDriftPpm() << L",";
+        js << L"\"audioClockValid\":" << (m_audioRouter->ClockEstimateValid() ? L"true" : L"false") << L",";
+        js << L"\"audioUnderrunEvents\":" << m_audioRouter->UnderrunEvents() << L",";
+        js << L"\"audioReloads\":" << m_audioRouter->AutomaticReloads() << L",";
         js << L"\"audioUnderruns\":" << m_audioRouter->Underruns() << L",";
         js << L"\"audioOverruns\":" << m_audioRouter->Overruns() << L",";
         js << L"\"audioResyncs\":" << m_audioRouter->Resyncs() << L",";

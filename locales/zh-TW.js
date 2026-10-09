@@ -1,6 +1,12 @@
 // NitLink Traditional Chinese (Taiwan) UI resource.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['zh-TW'] = {
+  "audio.clockEstimate": "時鐘漂移估計",
+  "audio.clockLearning": "估計中／無法使用",
+  "audio.underrunEvents": "欠載次數",
+  "audio.reloads": "自動重載次數",
+  "audio.recoveryHelp": "漂移補償結合多個音訊區塊的裝置時鐘估計與 FIFO 水位回饋；一般欠載保留估計。2 秒內欠載 3 次或累計缺失 20 毫秒音訊，或水位偏差達 20 毫秒（且不少於兩個輸出區塊）並持續 250 毫秒時，重載擷取與播放端。重載冷卻時間為 10 秒，FIFO 目標始終不變。關閉漂移補償也會關閉閾值重載。",
+
   "audio.endpoint.0": "獨占已暫停：視窗失焦、隱藏、最小化或正在恢復焦點",
   "audio.endpoint.1": "相容共用模式（Windows 轉換）",
   "audio.endpoint.2": "原生共用模式（低週期）",

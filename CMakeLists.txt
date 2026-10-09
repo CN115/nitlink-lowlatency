@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NitLink VERSION 0.1.1 LANGUAGES CXX)
+project(NitLink VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -173,6 +173,10 @@ if(BUILD_TESTING)
     add_executable(NitLinkAudioConversionTests tests/audio_conversion_tests.cpp)
     target_include_directories(NitLinkAudioConversionTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME audio_native_conversion COMMAND NitLinkAudioConversionTests)
+
+    add_executable(NitLinkAudioClockRecoveryTests tests/audio_clock_recovery_tests.cpp)
+    target_include_directories(NitLinkAudioClockRecoveryTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME audio_clock_recovery COMMAND NitLinkAudioClockRecoveryTests)
 
     add_executable(NitLinkAudioDriftTests tests/audio_drift_tests.cpp)
     target_include_directories(NitLinkAudioDriftTests PRIVATE ${CMAKE_SOURCE_DIR}/src)

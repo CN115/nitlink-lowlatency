@@ -2,6 +2,7 @@
 
 #include <string>
 #include "drift_controller.h"
+#include "clock_recovery.h"
 #include "audio_convert.h"
 #include "exclusive_focus.h"
 #include <windows.h>
@@ -52,6 +53,10 @@ public:
     void SetOwnerWindow(HWND window) { m_ownerWindow = window; }
     bool ExclusiveActive() const { return m_exclusiveActive.load(); }
     uint32_t RenderQueueMs() const { return m_queueMs.load(); }
+    int EstimatedDriftPpm() const { return m_estimatedPpm.load(); }
+    bool ClockEstimateValid() const { return m_clockEstimateValid.load(); }
+    uint64_t UnderrunEvents() const { return m_underrunEvents.load(); }
+    uint64_t AutomaticReloads() const { return m_automaticReloads.load(); }
     int DriftPpm() const { return m_driftPpm.load(); }
     uint32_t RenderPeriodUs() const { return m_periodUs.load(); }
     uint64_t Resyncs() const { return m_resyncs.load(); }
@@ -121,7 +126,10 @@ private:
     void FifoSkip(UINT32 frames);
     void LogStatsIfDue();
     UINT32 FifoResample(BYTE* out, UINT32 frames, double ratio);
-    void ResetDrift();
+    void ResetDrift(bool preserveClock = false);
+    void SetupRenderClock();
+    double ReadClockEstimate(double now);
+    void ObserveRecovery(double now, double error, double missing, double block);
     void PublishQueue(UINT32 padding);
     bool PrepareConversion();
     AudioConvert::Format m_inputPcm{}, m_outputPcm{};
@@ -148,6 +156,13 @@ private:
     std::atomic<bool> m_adaptiveSupported{false};
     UINT32 m_renderPeriodFrames = 0;
     DriftController m_drift;
+    AudioClockRate m_captureClockRate, m_renderClockRate;
+    AudioRecoveryGuard m_recoveryGuard;
+    ComPtr<IAudioClock> m_renderClock;
+    UINT64 m_renderClockFrequency = 0;
+    std::atomic<int> m_estimatedPpm{0};
+    std::atomic<bool> m_clockEstimateValid{false};
+    std::atomic<uint64_t> m_underrunEvents{0}, m_automaticReloads{0};
     double m_phase = 1.0, m_slipBudget = 0;
     std::chrono::steady_clock::time_point m_lastDrift{};
 
