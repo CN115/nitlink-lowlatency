@@ -1,7 +1,19 @@
-NitLink CN115 audio-lab 2 — Windows x64 测试版
-基于 nitlink-dev/nitlink d522bdc，接续 audio-lab 1。第三方实验 fork。
+NitLink CN115 audio-lab 3 — Windows x64 测试版
+基于 nitlink-dev/nitlink d522bdc，接续 audio-lab 2。第三方实验 fork。
 
-本版针对“主板声卡播放队列卡在 11 ms”的改造
+第三版新增可选 WASAPI 独占输出
+- F1 → Audio → Exclusive output (minimum period) / 獨占輸出（最小週期）。
+- 默认关闭，旧配置仍使用共享模式；开启后自动使用 GetDevicePeriod 报告的独占最小周期。
+- 遇到 BUFFER_SIZE_NOT_ALIGNED 时，读取驱动对齐帧数，在新客户端上重新初始化。
+- 显示 exclusive min、requested、actual block、帧数与 driver stream latency。
+- 独占生效时，原 Render queue 控件暂不可调，原值保留供共享模式使用。
+- 独占事件每次提交完整区块；不把区块时长冒充 GetCurrentPadding 实时队列延迟。
+- 初始化（包括 Start）失败自动回退共享；运行错误或超过 2 秒未收到播放事件也回退。
+- 回退显示 exclusive fallback 阶段/错误码。运行错误后关闭再开启独占开关可重试。
+- 独占期间其他程序无法同时使用此输出设备；切回共享或退出程序即可释放。
+- 本版不修改 Windows 的全局独占权限设置，不保证所有驱动都允许独占。
+
+前版针对“主板声卡播放队列卡在 11 ms”的改造
 - 改为优先使用播放设备自己的混音格式协商 IAudioClient3 短周期。
 - 程序内转换采集/播放端的 PCM 位深、浮点格式、采样率和常见声道布局。
 - 使用带限的多相 sinc 重采样，同时处理标称采样率差异和慢速时钟漂移。
@@ -14,7 +26,10 @@ NitLink CN115 audio-lab 2 — Windows x64 测试版
 VC++ 运行库随包携带。本包未代码签名。
 
 F1 → Audio → Audio latency lab / 音訊低延遲實驗室
-先保留 Capture FIFO 12 ms，把 Render queue 改为 3 ms，保持 Drift 开启。
+本次先保留 Capture FIFO 12 ms、Drift 开启，勾选独占输出；无需设置独占周期。
+检查 actual block 是否低于 10 ms，试听并观察欠载是否持续增加。
+若不稳定，可提高 FIFO 至 20 ms；仍不稳定则切回共享。独占周期本版固定自动最小值。
+共享模式测试可把 Render queue 改为 3 ms。
 请优先反馈底部完整的诊断文字，尤其是：
   Native shared low-period / Compatibility shared
   native min / default / actual
@@ -23,17 +38,17 @@ F1 → Audio → Audio latency lab / 音訊低延遲實驗室
 若 Native shared low-period 的 actual 低于 10 ms，说明这条路径已成功降低引擎周期。
 若 native min 本身为 10 ms，本版共享路径不能强行越过驱动公布的下限。
 若 min 低于 10 ms 却回退，请保留错误码，继续定位设备占用、格式或驱动限制。
-本版没有启用独占模式，也不会独占声卡或修改 Windows 全局声音设置。
+独占模式独立查询设备最小周期，不能由 native min（共享模式最小值）推断。
 如果出现爆音或欠载持续增加，把播放目标调高到 5 / 8 / 10 ms；FIFO 可提高至 20 ms。
 
 设置范围和读数
 Capture FIFO / Render queue 都为 3–100 ms；保存后立即生效，播放端短暂重启。
 继承 lab1 配置时保留原有数值；新配置默认仍是 12 / 10 ms。
-播放有效目标至少为实际引擎周期 + 1 ms（并受已分配端点缓冲大小约束）。
+共享播放有效目标至少为实际引擎周期 + 1 ms（并受已分配端点缓冲大小约束）。
 因此引擎实际为 10 ms 时，低于 11 ms 的设置仍被保护下限抬高。
-只有先降低实际引擎周期，才能安全降低这条路径的播放队列。
+切换独占后按驱动最小周期和对齐要求提交完整区块，不再应用这条共享模式下限。
 
-FIFO 和 render 是同一次音频泵处理后的快照；render 从 WASAPI 再查询取得。
+共享模式下，FIFO 和 render 是同一次音频泵处理后的快照；render 从 WASAPI 再查询取得。
 FIFO 按采集采样率换算，render 按播放采样率换算，排除 FIFO 中已播放的滤波历史。
 FIFO 的一秒均值按时间加权，范围来自该时间窗内处理后的样本；启动不足一秒时为零。
 这些都是队列占用，并非端到端实测延迟。FIFO 包级锯齿波动是预期行为。
@@ -58,6 +73,8 @@ sinc 滤波器采用 Blackman 窗、512 个相位并在相位间插值；64–51
 验证范围
 自动化覆盖 PCM 编解码、24-in-32 对齐、声道映射、周期对齐、滤波响应、
 跨采样率环形 FIFO、分块相位连续性、同一快照的单位换算，以及原有漂移/设置回归。
+独占测试使用 WASAPI 接口替身，覆盖最小周期、对齐重试、新客户端、启动预填充、
+整块读写、采集事件不触发独占写入、欠载静音及失败回退标记、开关保存/输入校验。
 Windows 构建与自动化通过不代表真实主板声卡已验证。需要在你的机器上确认
 实际周期、试听质量、长时间稳定性，以及切换设备/重连/休眠后的恢复情况。
 保留 BUILD.txt 的提交号，反馈设备型号、Windows 格式、两个缓冲值和完整诊断文字。
