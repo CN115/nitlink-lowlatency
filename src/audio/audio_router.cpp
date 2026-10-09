@@ -30,9 +30,7 @@ static constexpr int kRetryIntervalMs = 500;
 // is how much audio stays queued inside the render endpoint: enough to ride
 // out scheduling jitter, small enough not to add noticeable latency.
 static constexpr int   kFifoCapacityMs  = 400;
-static constexpr int   kFifoTargetMs    = 40;
-static constexpr int   kFifoDeadbandMs  = 10;
-static constexpr int   kRenderQueueMs   = 30;
+
 static constexpr int   kStatsIntervalMs = 5000;
 static constexpr DWORD kPumpWaitMs      = 200;
 
@@ -48,6 +46,27 @@ static const GUID kSubtypeUnknown = {0,0,0,{0,0,0,0,0,0,0,0}};
 
 static void AudioLog(const std::wstring& msg) {
     OutputDebugStringW((L"[NitLink/Audio] " + msg + L"\n").c_str());
+}
+
+// IAudioClient3 accepts EVENTCALLBACK only. Conversion stays on the legacy
+// shared-mode path when the endpoint cannot open the capture format directly.
+static bool TryLowPeriod(IMMDevice* device, const WAVEFORMATEX* format,
+                         HANDLE event, int requestedMs, ComPtr<IAudioClient>& client,
+                         UINT32& periodFrames) {
+    ComPtr<IAudioClient3> low;
+    if (FAILED(device->Activate(__uuidof(IAudioClient3), CLSCTX_ALL, nullptr,
+                               reinterpret_cast<void**>(low.GetAddressOf())))) return false;
+    UINT32 def = 0, fundamental = 0, minimum = 0, maximum = 0;
+    if (FAILED(low->GetSharedModeEnginePeriod(format, &def, &fundamental, &minimum, &maximum)) ||
+        !fundamental || !minimum || maximum < minimum) return false;
+    const UINT32 requested = static_cast<UINT32>(uint64_t(format->nSamplesPerSec) * requestedMs / 1000);
+    UINT32 period = std::clamp((requested + fundamental - 1) / fundamental * fundamental,
+                              minimum, maximum);
+    if (FAILED(low->InitializeSharedAudioStream(AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                                period, format, nullptr))) return false;
+    if (FAILED(low->SetEventHandle(event)) || FAILED(low.As(&client))) return false;
+    periodFrames = period;
+    return true;
 }
 
 static std::wstring HrString(HRESULT hr) {
@@ -362,7 +381,10 @@ bool AudioRouter::SetupCapture()
     hr = m_captureClient->GetMixFormat(&m_captureFormat);
     if (FAILED(hr) || !ValidWaveFormat(m_captureFormat)) { AudioLog(L"capture GetMixFormat failed " + HrString(hr)); return false; }
 
-    // Initialize with shared mode, 100ms buffer for safety
+    UINT32 capturePeriod = 0;
+    if (!TryLowPeriod(captureDevice.Get(), m_captureFormat, m_captureEvent, 3,
+                      m_captureClient, capturePeriod)) {
+    // Capacity for delayed scheduling; DrainCapture consumes packets immediately.
     hr = m_captureClient->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -373,6 +395,7 @@ bool AudioRouter::SetupCapture()
     if (FAILED(hr)) { AudioLog(L"capture Initialize failed " + HrString(hr)); m_lastCaptureError = hr; return false; }
     hr = m_captureClient->SetEventHandle(m_captureEvent);
     if (FAILED(hr)) { AudioLog(L"capture SetEventHandle failed " + HrString(hr)); return false; }
+    }
     if (!FifoReset(m_captureFormat->nBlockAlign, m_captureFormat->nSamplesPerSec)) return false;
 
     hr = m_captureClient->GetBufferSize(&m_captureBufferFrames);
@@ -420,7 +443,10 @@ bool AudioRouter::SetupRender()
         (void**)m_renderClient.ReleaseAndGetAddressOf());
     if (FAILED(hr)) { AudioLog(L"render Activate failed " + HrString(hr)); return false; }
 
-    hr = m_renderClient->Initialize(
+    m_renderPeriodFrames = 0;
+    const bool lowPeriod = TryLowPeriod(renderDevice.Get(), m_captureFormat, m_renderEvent,
+        std::max(1, m_renderQueueTargetMs.load() / 2), m_renderClient, m_renderPeriodFrames);
+    hr = lowPeriod ? S_OK : m_renderClient->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         kConvertFlags | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
         100 * REFTIMES_PER_MILLISEC,
@@ -469,6 +495,19 @@ bool AudioRouter::SetupRender()
     hr = m_renderClient->GetService(IID_PPV_ARGS(&m_renderService));
     if (FAILED(hr)) return false;
 
+    if (!m_renderPeriodFrames) {
+        REFERENCE_TIME period = 0;
+        if (SUCCEEDED(m_renderClient->GetDevicePeriod(&period, nullptr)))
+            m_renderPeriodFrames = static_cast<UINT32>((uint64_t(period) * m_samplesPerSec + REFTIMES_PER_SEC - 1) / REFTIMES_PER_SEC);
+        if (!m_renderPeriodFrames) m_renderPeriodFrames = m_samplesPerSec / 100;
+    }
+    m_periodUs = static_cast<uint32_t>(uint64_t(m_renderPeriodFrames) * 1000000 / m_samplesPerSec);
+    m_adaptiveSupported = (EffectiveSubFormat(m_renderFormat) == kSubtypeIeeeFloat && m_renderFormat->wBitsPerSample == 32) ||
+        (EffectiveSubFormat(m_renderFormat) == kSubtypePcm && m_renderFormat->wBitsPerSample == 16);
+    // Discard all audio captured while the previous output was unavailable.
+    m_fifoHead = m_fifoBytes = 0;
+    m_fifoPrimed = false;
+    ResetDrift();
     hr = m_renderClient->Start();
     if (FAILED(hr)) { AudioLog(L"renderClient->Start failed " + HrString(hr)); return false; }
 
@@ -494,6 +533,9 @@ void AudioRouter::TeardownRender()
     m_renderClient.Reset();
     if (m_renderFormat) { CoTaskMemFree(m_renderFormat); m_renderFormat = nullptr; }
     m_renderBufferFrames = 0;
+    m_queueMs = 0;
+    m_periodUs = 0;
+    m_adaptiveSupported = false;
     m_renderDeviceId.clear();
 }
 
@@ -678,6 +720,7 @@ bool AudioRouter::FifoReset(UINT32 bytesPerFrame, UINT32 samplesPerSec)
     m_fifoHead   = 0;
     m_fifoBytes  = 0;
     m_fifoPrimed = false;
+    ResetDrift();
     m_winStart   = std::chrono::steady_clock::now();
     m_winIn = m_winOut = m_winUnderrun = m_winOverrun = m_winSlipDrop = m_winSlipDup = 0;
     m_winFillMin = 0xFFFFFFFFu;
@@ -691,6 +734,8 @@ void AudioRouter::FifoPush(const BYTE* data, UINT32 frames, bool silent)
     size_t bytes = (size_t)frames * m_bytesPerFrame;
     const size_t cap = m_fifo.size();
     if (bytes > cap) {
+        m_overrunFrames += (bytes - cap) / m_bytesPerFrame;
+        m_winOverrun += (bytes - cap) / m_bytesPerFrame;
         if (!silent) data += (bytes - cap);
         bytes  = cap;
     }
@@ -707,8 +752,8 @@ void AudioRouter::FifoPush(const BYTE* data, UINT32 frames, bool silent)
     const size_t tail  = (m_fifoHead + m_fifoBytes) % cap;
     const size_t first = (std::min)(bytes, cap - tail);
     if (silent) {
-        memset(m_fifo.data() + tail, 0, first);
-        if (bytes > first) memset(m_fifo.data(), 0, bytes - first);
+        memset(m_fifo.data() + tail, m_captureFormat && m_captureFormat->wBitsPerSample == 8 ? 128 : 0, first);
+        if (bytes > first) memset(m_fifo.data(), m_captureFormat && m_captureFormat->wBitsPerSample == 8 ? 128 : 0, bytes - first);
     } else {
         memcpy(m_fifo.data() + tail, data, first);
         if (bytes > first) memcpy(m_fifo.data(), data + first, bytes - first);
@@ -754,6 +799,12 @@ bool AudioRouter::DrainCapture()
             HandleStreamError(FAILED(release) ? release : E_INVALIDARG, L"invalid capture packet", true);
             return false;
         }
+        if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) && m_fifoPrimed) {
+            m_fifoHead = m_fifoBytes = 0;
+            m_fifoPrimed = false;
+            ++m_resyncs;
+            ResetDrift();
+        }
         FifoPush(data, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
         m_winIn += frames;
         hr = m_captureService->ReleaseBuffer(frames);
@@ -764,100 +815,127 @@ bool AudioRouter::DrainCapture()
     return true;
 }
 
+void AudioRouter::ResetDrift() {
+    m_drift.Reset(); m_driftPpm = 0; m_phase = 1.0; m_slipBudget = 0;
+    m_lastDrift = std::chrono::steady_clock::now();
+}
+
+UINT32 AudioRouter::FifoResample(BYTE* out, UINT32 frames, double ratio) {
+    const bool floating = EffectiveSubFormat(m_renderFormat) == kSubtypeIeeeFloat;
+    const UINT32 channels = m_renderFormat->nChannels;
+    const UINT32 sampleBytes = floating ? 4 : 2;
+    const UINT32 fill = static_cast<UINT32>(m_fifoBytes / m_bytesPerFrame);
+    const auto read = [&](UINT32 frame, UINT32 channel) -> double {
+        const size_t at = (m_fifoHead + size_t(frame) * m_bytesPerFrame + channel * sampleBytes) % m_fifo.size();
+        if (floating) { float v; memcpy(&v, &m_fifo[at], 4); return std::isfinite(v) ? v : 0.0; }
+        int16_t v; memcpy(&v, &m_fifo[at], 2); return v;
+    };
+    UINT32 written = 0;
+    for (; written < frames; ++written) {
+        const UINT32 k = static_cast<UINT32>(m_phase);
+        if (k + 2 >= fill) break;
+        const double t = m_phase - k;
+        for (UINT32 ch = 0; ch < channels; ++ch) {
+            const double v = DriftCubic(read(k-1,ch), read(k,ch), read(k+1,ch), read(k+2,ch), t);
+            BYTE* dst = out + size_t(written) * m_bytesPerFrame + ch * sampleBytes;
+            if (floating) { const float f = static_cast<float>(std::clamp(v, -1.0, 1.0)); memcpy(dst, &f, 4); }
+            else { const int16_t n = static_cast<int16_t>(std::clamp(std::lrint(v), -32768L, 32767L)); memcpy(dst, &n, 2); }
+        }
+        m_phase += ratio;
+    }
+    const UINT32 consumed = static_cast<UINT32>(m_phase) - 1;
+    FifoSkip(consumed);
+    m_phase -= consumed;
+    return written;
+}
+
 bool AudioRouter::FillRender()
 {
-    if (m_bytesPerFrame == 0 || m_samplesPerSec == 0) return true;
+    if (!m_bytesPerFrame || !m_samplesPerSec) return true;
     UINT32 padding = 0;
     HRESULT hr = m_renderClient->GetCurrentPadding(&padding);
     if (FAILED(hr)) { HandleStreamError(hr, L"GetCurrentPadding", false); return false; }
-
-    const auto msToFrames = [this](int ms) {
-        return (UINT32)((uint64_t)m_samplesPerSec * (uint64_t)ms / 1000ull);
-    };
-    const UINT32 queueTarget = (std::min)(m_renderBufferFrames, msToFrames(kRenderQueueMs));
-    if (padding >= queueTarget) return true;
-    const UINT32 want = queueTarget - padding;
-
-    UINT32 fill = (UINT32)(m_fifoBytes / m_bytesPerFrame);
-    const uint32_t fillMs = (uint32_t)((uint64_t)fill * 1000ull / m_samplesPerSec);
-    m_fillMs = fillMs;
-    const UINT32 target = msToFrames(kFifoTargetMs);
-    const UINT32 band   = msToFrames(kFifoDeadbandMs);
-
-    // Priming: play silence until the FIFO holds the target once, so steady
-    // state starts with headroom instead of climbing to it one slip at a time.
-    if (!m_fifoPrimed) {
-        if (fill < target) {
-            BYTE* out = nullptr;
-            hr = m_renderService->GetBuffer(want, &out);
-            if (FAILED(hr)) { HandleStreamError(hr, L"render GetBuffer", false); return false; }
-            m_renderService->ReleaseBuffer(want, AUDCLNT_BUFFERFLAGS_SILENT);
-            return true;
+    const auto frames = [this](int ms) { return UINT32(uint64_t(m_samplesPerSec) * ms / 1000); };
+    // Keep at least one engine period plus 1ms of scheduling headroom.
+    const UINT32 queue = std::min(m_renderBufferFrames,
+        std::max(frames(m_renderQueueTargetMs.load()), m_renderPeriodFrames + frames(1)));
+    m_queueMs = UINT32(uint64_t(padding) * 1000 / m_samplesPerSec);
+    UINT32 fill = UINT32(m_fifoBytes / m_bytesPerFrame);
+    m_fillMs = UINT32(uint64_t(fill) * 1000 / m_samplesPerSec);
+    if (padding >= queue) return true;
+    const UINT32 want = queue - padding;
+    const UINT32 reserve = frames(m_fifoTargetMs.load());
+    const UINT32 target = reserve + queue;
+    // A stall must not leave hundreds of milliseconds of old audio playing.
+    if (fill + padding > target + frames(std::max(20, m_fifoTargetMs.load()))) {
+        const UINT32 keep = reserve + want + 4;
+        if (fill > keep) {
+            const UINT32 drop = fill - keep;
+            FifoSkip(drop); fill -= drop;
+            m_overrunFrames += drop; m_winOverrun += drop; ++m_resyncs;
+            ResetDrift();
         }
+    }
+    if (!m_fifoPrimed) {
+        // Do not prequeue silence; begin only when the requested reserve AND
+        // first render block are available. No initial 30ms silent backlog.
+        if (fill < reserve + want + 4) return true;
         m_fifoPrimed = true;
+        ResetDrift();
     }
-    m_winFillMin = (std::min)(m_winFillMin, fillMs);
-    m_winFillMax = (std::max)(m_winFillMax, fillMs);
-
-    // Drift control, decided on the fill before this wake consumes anything.
-    // Above the band: drop one frame this wake. At or below its lower edge,
-    // repeat one frame so the next clock deficit has a frame of headroom.
-    // Correction remains active while the endpoint clocks differ; the
-    // deadband limits how often frames are slipped near the target fill.
-    bool dup = false;
-    if (fill > target + band && fill > 1) {
-        FifoSkip(1);
-        fill--;
-        m_winSlipDrop++;
-        m_slipCount++;
-    } else if (fill > 0 && fill + band <= target) {
-        dup = true;
-    }
-
-    const UINT32 toWrite = (std::min)(want, fill + (dup ? 1u : 0u));
-    if (toWrite == 0) {
-        // Nothing buffered: keep the engine fed with silence so the stream
-        // never stops, and count the gap.
-        BYTE* out = nullptr;
-        hr = m_renderService->GetBuffer(want, &out);
-        if (FAILED(hr)) { HandleStreamError(hr, L"render GetBuffer", false); return false; }
-        m_renderService->ReleaseBuffer(want, AUDCLNT_BUFFERFLAGS_SILENT);
-        m_winUnderrun   += want;
-        m_underrunFrames += want;
-        return true;
-    }
+    const auto now = std::chrono::steady_clock::now();
+    const double dt = std::chrono::duration<double>(now - m_lastDrift).count();
+    m_lastDrift = now;
+    const double ppm = m_driftEnabled.load() ?
+        m_drift.Update((double(fill) + padding - target) / m_samplesPerSec, dt) : 0;
+    m_driftPpm = static_cast<int>(std::lround(ppm));
+    m_winFillMin = std::min(m_winFillMin, m_fillMs.load());
+    m_winFillMax = std::max(m_winFillMax, m_fillMs.load());
     BYTE* out = nullptr;
-    hr = m_renderService->GetBuffer(toWrite, &out);
+    hr = m_renderService->GetBuffer(want, &out);
     if (FAILED(hr)) { HandleStreamError(hr, L"render GetBuffer", false); return false; }
-    // A repeat must consume one fewer FIFO frame than the render request
-    // so the fill can recover toward the lower band. Single-frame requests
-    // need their one source frame because no earlier output exists to repeat.
-    const UINT32 toRead = (dup && toWrite > 1) ? toWrite - 1 : toWrite;
-    UINT32 written = FifoPop(out, (std::min)(toRead, fill));
-    if (dup && written > 0 && written < toWrite) {
-        memcpy(out + (size_t)written * m_bytesPerFrame,
-               out + (size_t)(written - 1) * m_bytesPerFrame, m_bytesPerFrame);
-        written++;
-        m_winSlipDup++;
-        m_slipCount++;
-    }
-    if (written < toWrite) {
-        memset(out + (size_t)written * m_bytesPerFrame, 0,
-               (size_t)(toWrite - written) * m_bytesPerFrame);
-        m_winUnderrun    += toWrite - written;
-        m_underrunFrames += toWrite - written;
-    }
-    DWORD releaseFlags = 0;
-    if (m_muted.load()) {
-        releaseFlags = AUDCLNT_BUFFERFLAGS_SILENT;
+    UINT32 written = 0;
+    if (m_adaptiveSupported && m_driftEnabled) {
+        written = FifoResample(out, want, 1.0 + ppm / 1000000.0);
     } else {
-        const float vol = m_volume.load();
-        if (vol < 0.999f) ScaleInPlace(out, toWrite, m_renderFormat, vol);
+        // Rare encodings keep the upstream copy path. Corrections now follow
+        // elapsed sample time, with filtered error, rather than event count.
+        m_slipBudget += want * ppm / 1000000.0;
+        const UINT32 drop = m_slipBudget >= 1 ? std::min(UINT32(m_slipBudget), fill) : 0;
+        if (drop) { FifoSkip(drop); fill -= drop; m_slipBudget -= drop; m_slipCount += drop; m_winSlipDrop += drop; }
+        const UINT32 dup = m_slipBudget <= -1 && want > 1 && fill ?
+            std::min(UINT32(-m_slipBudget), want - 1) : 0;
+        written = FifoPop(out, std::min(want - dup, fill));
+        if (written && dup) {
+            for (UINT32 i = 0; i < dup; ++i) memcpy(out + size_t(written + i) * m_bytesPerFrame,
+                out + size_t(written - 1) * m_bytesPerFrame, m_bytesPerFrame);
+            written += dup; m_slipBudget += dup; m_slipCount += dup; m_winSlipDup += dup;
+        }
     }
-    hr = m_renderService->ReleaseBuffer(toWrite, releaseFlags);
+    if (written < want) {
+        memset(out + size_t(written) * m_bytesPerFrame,
+               m_renderFormat->wBitsPerSample == 8 ? 128 : 0, size_t(want-written) * m_bytesPerFrame);
+        m_underrunFrames += want-written; m_winUnderrun += want-written;
+        m_fifoPrimed = false;
+        ResetDrift();
+    }
+    const bool silent = m_muted.load() || written == 0;
+    if (!silent && m_volume.load() < 0.999f) ScaleInPlace(out, want, m_renderFormat, m_volume.load());
+    hr = m_renderService->ReleaseBuffer(want, silent ? AUDCLNT_BUFFERFLAGS_SILENT : 0);
     if (FAILED(hr)) { HandleStreamError(hr, L"render ReleaseBuffer", false); return false; }
-    m_winOut += toWrite;
+    m_winOut += want;
+    m_fillMs = UINT32(uint64_t(m_fifoBytes / m_bytesPerFrame) * 1000 / m_samplesPerSec);
+    m_queueMs = UINT32(uint64_t(padding + want) * 1000 / m_samplesPerSec);
     return true;
+}
+
+void AudioRouter::SetLatency(int fifoMs, int renderMs, bool drift) {
+    fifoMs = std::clamp(fifoMs, 3, 100);
+    renderMs = std::clamp(renderMs, 3, 100);
+    const bool fifoChanged = m_fifoTargetMs.exchange(fifoMs) != fifoMs;
+    const bool queueChanged = m_renderQueueTargetMs.exchange(renderMs) != renderMs;
+    const bool driftChanged = m_driftEnabled.exchange(drift) != drift;
+    if (fifoChanged || queueChanged || driftChanged) m_restartRender = true;
 }
 
 void AudioRouter::LogStatsIfDue()
@@ -869,6 +947,8 @@ void AudioRouter::LogStatsIfDue()
        << (m_winFillMin == 0xFFFFFFFFu ? 0u : m_winFillMin) << L", max " << m_winFillMax
        << L"), in " << m_winIn << L", out " << m_winOut
        << L", underrun " << m_winUnderrun << L", overrun " << m_winOverrun
+       << L", render " << m_queueMs.load() << L" ms, drift " << m_driftPpm.load()
+       << L" ppm, resync " << m_resyncs.load()
        << L", slip +" << m_winSlipDrop << L"/-" << m_winSlipDup;
     AudioLog(ss.str());
     m_winStart = now;
