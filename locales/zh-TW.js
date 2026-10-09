@@ -110,7 +110,7 @@ window.NitLinkLocales['zh-TW'] = {
   'row.mute': '靜音',
   'row.captureGain': '擷取增益',
   'tooltip.mute': '將擷取播放匯流排靜音。',
-  'tooltip.captureGain': 'WASAPI 播放音量。若要維持位元完美的數位擷取，請保持 100。',
+  'tooltip.captureGain': 'WASAPI 播放音量。100 表示原始增益；自適應漂移補償可能會重新取樣音訊。',
   'section.shortcuts': '快捷鍵',
   'section.globalCapturing': '擷取時全域有效',
   'shortcut.settings': '設定',
