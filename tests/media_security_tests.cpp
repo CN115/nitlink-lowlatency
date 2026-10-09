@@ -31,9 +31,142 @@ public:
     HRESULT STDMETHODCALLTYPE GetMediaTime(LONGLONG*, LONGLONG*) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE SetMediaTime(LONGLONG*, LONGLONG*) override { return E_NOTIMPL; }
 };
+
+// Deterministic WASAPI doubles: enforce exclusive packet/event contracts.
+struct ExclusiveState {
+    int activations=0, initializes=0, gets=0, releases=0, paddings=0, starts=0;
+    UINT32 frames=48, lastFlags=0;
+    REFERENCE_TIME minimum=10000;
+    bool alignment=false, unsupported=false;
+    HRESULT getError=S_OK, startError=S_OK;
+    std::vector<REFERENCE_TIME> periods;
+    std::vector<BYTE> bytes=std::vector<BYTE>(4096);
+};
+class FakeRender final : public IAudioRenderClient {
+    ULONG refs=1; ExclusiveState& s;
+public:
+    explicit FakeRender(ExclusiveState& state):s(state) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** p) override { *p=nullptr; return E_NOINTERFACE; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+    ULONG STDMETHODCALLTYPE Release() override { auto n=--refs; if (!n) delete this; return n; }
+    HRESULT STDMETHODCALLTYPE GetBuffer(UINT32 frames,BYTE** p) override {
+        Check(frames==s.frames,"exclusive GetBuffer must request a whole block");
+        ++s.gets; *p=nullptr;
+        if (FAILED(s.getError)) return s.getError;
+        *p=s.bytes.data(); return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE ReleaseBuffer(UINT32 frames,DWORD flags) override {
+        Check(frames==s.frames,"exclusive ReleaseBuffer must release a whole block");
+        ++s.releases; s.lastFlags=flags; return S_OK;
+    }
+};
+class FakeAudio final : public IAudioClient {
+    ULONG refs=1; ExclusiveState& s;
+public:
+    explicit FakeAudio(ExclusiveState& state):s(state) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** p) override { *p=nullptr; return E_NOINTERFACE; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+    ULONG STDMETHODCALLTYPE Release() override { auto n=--refs; if (!n) delete this; return n; }
+    HRESULT STDMETHODCALLTYPE Initialize(AUDCLNT_SHAREMODE mode,DWORD flags,REFERENCE_TIME duration,
+        REFERENCE_TIME period,const WAVEFORMATEX*,LPCGUID) override {
+        Check(mode==AUDCLNT_SHAREMODE_EXCLUSIVE && flags==AUDCLNT_STREAMFLAGS_EVENTCALLBACK,"exclusive event flags");
+        Check(period==duration && period>=s.minimum,"exclusive equal buffer and period >= driver minimum");
+        s.periods.push_back(period); ++s.initializes;
+        if (s.alignment && s.initializes==1) return AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetBufferSize(UINT32* n) override { *n=s.frames; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetStreamLatency(REFERENCE_TIME* n) override { *n=20000; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetCurrentPadding(UINT32*) override { ++s.paddings; return E_UNEXPECTED; }
+    HRESULT STDMETHODCALLTYPE IsFormatSupported(AUDCLNT_SHAREMODE mode,const WAVEFORMATEX*,WAVEFORMATEX**) override {
+        Check(mode==AUDCLNT_SHAREMODE_EXCLUSIVE,"probe exclusive format");
+        return s.unsupported ? AUDCLNT_E_UNSUPPORTED_FORMAT : S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetMixFormat(WAVEFORMATEX**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetDevicePeriod(REFERENCE_TIME* normal,REFERENCE_TIME* minimum) override {
+        *normal=100000; *minimum=s.minimum; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Start() override {
+        Check(s.releases>0,"exclusive stream must be primed before Start"); ++s.starts; return s.startError;
+    }
+    HRESULT STDMETHODCALLTYPE Stop() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetEventHandle(HANDLE) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetService(REFIID id,void** p) override {
+        if (id!=__uuidof(IAudioRenderClient)) { *p=nullptr; return E_NOINTERFACE; }
+        *p=static_cast<IAudioRenderClient*>(new FakeRender(s)); return S_OK;
+    }
+};
+class FakeDevice final : public IMMDevice {
+    ULONG refs=1; ExclusiveState& s;
+public:
+    explicit FakeDevice(ExclusiveState& state):s(state) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** p) override { *p=nullptr; return E_NOINTERFACE; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+    ULONG STDMETHODCALLTYPE Release() override { return --refs; }
+    HRESULT STDMETHODCALLTYPE Activate(REFIID id,DWORD,PROPVARIANT*,void** p) override {
+        Check(id==__uuidof(IAudioClient),"activate a fresh audio client"); ++s.activations;
+        *p=static_cast<IAudioClient*>(new FakeAudio(s)); return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE OpenPropertyStore(DWORD,IPropertyStore**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetId(LPWSTR*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetState(DWORD*) override { return E_NOTIMPL; }
+};
 namespace NitLink {
 struct AudioRouterTestAccess {
+    static void Exclusive() {
+        WAVEFORMATEX pcm{WAVE_FORMAT_PCM,2,48000,192000,4,16,0};
+        {
+            ExclusiveState state; state.alignment=true; state.frames=64;
+            FakeDevice device(state); ComPtr<IAudioClient> client; ExclusiveResult result;
+            Check(OpenExclusive(&device,&pcm,nullptr,client,result),"aligned exclusive initialization");
+            Check(state.activations==2 && state.initializes==2,"alignment uses a fresh client");
+            Check(state.periods[0]==10000 && state.periods[1]==13333 && result.frames==64 && result.aligned,
+                "default minimum then exact driver frame alignment");
+        }
+        {
+            ExclusiveState state; state.minimum=0;
+            FakeDevice device(state); ComPtr<IAudioClient> client; ExclusiveResult result;
+            Check(!OpenExclusive(&device,&pcm,nullptr,client,result) && state.initializes==0,"invalid minimum rejected");
+        }
+        ExclusiveState state; FakeDevice device(state); AudioRouter router;
+        router.m_captureFormat=CloneWaveFormat(&pcm);
+        Check(router.FifoReset(4,48000),"exclusive source FIFO");
+        std::wstring failure;
+        Check(router.SetupExclusive(&device,&pcm,failure),"exclusive setup");
+        Check(state.periods.size()==1 && state.periods[0]==state.minimum && state.starts==1,
+            "exclusive defaults to minimum, independent of shared queue target");
+        Check(router.ExclusiveActive() && router.RenderPeriodUs()==1000 && state.lastFlags==AUDCLNT_BUFFERFLAGS_SILENT,
+            "exclusive prime and active telemetry");
+        const int primingGets=state.gets;
+        Check(router.FillRender(false) && state.gets==primingGets,"capture wake must not acquire exclusive buffer");
+        Check(router.FillRender(true) && state.releases==2 && router.Underruns()==0,
+            "waiting for FIFO submits whole silent block without startup underrun");
+        std::vector<int16_t> audio(2000*2,12000);
+        router.FifoPush(reinterpret_cast<const BYTE*>(audio.data()),2000,false);
+        Check(router.FillRender(true) && state.lastFlags==0,"exclusive event writes converted audio");
+        Check(state.paddings==0,"exclusive path never queries shared padding");
+        router.m_fifoBytes=router.m_sinc.History()*4;
+        Check(router.FillRender(true) && state.lastFlags==AUDCLNT_BUFFERFLAGS_SILENT && router.Underruns()==48,
+            "starvation releases a whole silent block and reprimes");
+        state.getError=AUDCLNT_E_BUFFER_ERROR;
+        Check(!router.FillRender(true) && router.m_restartRender && !router.m_exclusiveFailure.empty(),
+            "exclusive render error schedules shared fallback");
+        router.SetExclusive(true); router.SetExclusive(false);
+        Check(router.m_retryExclusive && !router.m_exclusiveRequested,"explicit mode change clears retry latch");
+        router.TeardownRender();
+        Check(!router.ExclusiveActive(),"teardown clears actual exclusive state");
+        state.getError=S_OK; state.startError=AUDCLNT_E_DEVICE_IN_USE;
+        Check(!router.SetupExclusive(&device,&pcm,failure) && failure.find(L"start exclusive")!=std::wstring::npos,
+            "exclusive Start failure is reported for fallback");
+        router.TeardownRender();
+        state.unsupported=true;
+        Check(!router.SetupExclusive(&device,&pcm,failure) && failure.find(L"no convertible")!=std::wstring::npos,
+            "unsupported formats report fallback");
+        router.TeardownRender(); router.TeardownCapture();
+    }
     static void Run() {
+        Exclusive();
         AudioRouter router;
         Check(!router.FifoReset(UINT32_MAX, UINT32_MAX), "FIFO allocation cap");
         Check(router.FifoReset(8, 48000), "valid FIFO");
