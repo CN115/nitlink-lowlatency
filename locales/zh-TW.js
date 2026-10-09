@@ -2,7 +2,7 @@
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['zh-TW'] = {
   "audio.exclusive": "獨占輸出（最小週期）",
-  "audio.exclusiveHelp": "選用：播放期間獨占此輸出裝置，其他程式無法同時使用。自動申請驅動最小週期，必要時依緩衝對齊調整；失敗回退共用模式。關閉此選項即可釋放獨占。",
+  "audio.exclusiveHelp": "選用：播放期間獨占此輸出裝置，其他程式無法同時使用。自動申請驅動最小週期，必要時依緩衝對齊調整；失敗回退共用模式。失焦、最小化或隱藏時自動釋放獨占並改用共用音訊；回到前景 200 毫秒後恢復獨占。關閉程式立即釋放裝置，NitLink 設定面板仍視為前景。",
   "audio.exclusiveAuto": "獨占：自動使用驅動最小值",
   "audio.block": "實際區塊（非佇列延遲）",
   'audio.requested': "設定播放佇列",

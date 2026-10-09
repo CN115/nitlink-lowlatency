@@ -114,6 +114,51 @@ public:
 };
 namespace NitLink {
 struct AudioRouterTestAccess {
+    static void Focus() {
+        AudioRouter router;
+        const auto t=ExclusiveFocusGate::Clock::now();
+        router.SetExclusive(true); router.m_restartRender=false; router.m_retryExclusive=false;
+        router.UpdateExclusiveFocus(false,t);
+        Check(!router.m_exclusivePermitted && !router.m_restartRender,"background startup remains shared");
+        router.UpdateExclusiveFocus(true,t);
+        router.UpdateExclusiveFocus(true,t+std::chrono::milliseconds(199));
+        Check(!router.m_exclusivePermitted,"exclusive restoration waits for stable focus");
+        router.UpdateExclusiveFocus(true,t+std::chrono::milliseconds(200));
+        Check(router.m_exclusivePermitted && router.m_restartRender && router.m_retryExclusive,"foreground restores requested exclusive mode");
+        router.m_restartRender=false;
+        router.UpdateExclusiveFocus(true,t+std::chrono::milliseconds(210));
+        Check(!router.m_restartRender,"stable focus never repeatedly restarts audio");
+        router.UpdateExclusiveFocus(false,t+std::chrono::milliseconds(211));
+        Check(!router.m_exclusivePermitted && router.m_restartRender && router.m_exclusiveRequested,
+            "focus loss immediately requests shared without changing saved preference");
+        router.m_restartRender=false;
+        router.UpdateExclusiveFocus(true,t+std::chrono::milliseconds(220));
+        router.UpdateExclusiveFocus(false,t+std::chrono::milliseconds(250));
+        router.UpdateExclusiveFocus(true,t+std::chrono::milliseconds(300));
+        router.UpdateExclusiveFocus(true,t+std::chrono::milliseconds(499));
+        Check(!router.m_exclusivePermitted,"brief activation resets the recovery delay");
+        router.SetExclusive(false); router.m_restartRender=false;
+        router.UpdateExclusiveFocus(true,t+std::chrono::milliseconds(500));
+        Check(!router.m_restartRender && !router.m_exclusiveRequested,"focus changes leave explicitly shared audio alone");
+
+        HWND owner=CreateWindowExW(0,L"STATIC",L"audio-focus-test",WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+            0,0,200,100,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+        HWND popup=CreateWindowExW(0,L"STATIC",L"settings-test",WS_POPUP|WS_VISIBLE,
+            0,0,100,50,owner,nullptr,GetModuleHandleW(nullptr),nullptr);
+        HWND child=CreateWindowExW(0,L"STATIC",L"webview-test",WS_CHILD|WS_VISIBLE,
+            0,0,50,20,owner,nullptr,GetModuleHandleW(nullptr),nullptr);
+        Check(owner && popup && child,"focus test windows created");
+        Check(IsAudioWindowForeground(owner,owner) && IsAudioWindowForeground(owner,popup) &&
+            IsAudioWindowForeground(owner,child),"main, owned settings and child controls share foreground identity");
+        Check(!IsAudioWindowForeground(owner,nullptr) && !IsAudioWindowForeground(owner,GetDesktopWindow()),
+            "other or absent foreground releases exclusive");
+        ShowWindow(owner,SW_MINIMIZE);
+        Check(!IsAudioWindowForeground(owner,owner),"minimized main window releases exclusive");
+        ShowWindow(owner,SW_RESTORE); ShowWindow(owner,SW_HIDE);
+        Check(!IsAudioWindowForeground(owner,popup),"hidden main window releases exclusive");
+        DestroyWindow(owner);
+        Check(!IsAudioWindowForeground(owner,owner),"destroyed main window cannot reacquire exclusive");
+    }
     static void Exclusive() {
         WAVEFORMATEX pcm{WAVE_FORMAT_PCM,2,48000,192000,4,16,0};
         {
@@ -166,6 +211,7 @@ struct AudioRouterTestAccess {
         router.TeardownRender(); router.TeardownCapture();
     }
     static void Run() {
+        Focus();
         Exclusive();
         AudioRouter router;
         Check(!router.FifoReset(UINT32_MAX, UINT32_MAX), "FIFO allocation cap");

@@ -460,6 +460,9 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     m_window->SetPreventSleep(m_config->preventSleep);
     m_window->SetCloseCallback([this] {
         if (m_webviewSettings) m_webviewSettings->DispatchPendingMessages(/*closing=*/true);
+        // Release WASAPI before destroying the window or waiting on unrelated workers.
+        if (m_audioRouter) m_audioRouter->Shutdown();
+        m_running=false;
     });
 
     auto [actualW, actualH] = m_window->GetClientSize();
@@ -1110,6 +1113,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     }
 
     m_audioRouter = std::make_unique<AudioRouter>();
+    m_audioRouter->SetOwnerWindow(m_window->GetHWND());
     m_audioRouter->SetLatency(m_config->audioFifoMs, m_config->audioRenderMs, m_config->audioDrift);
     m_audioRouter->SetExclusive(m_config->audioExclusive);
     // Route audio from the selected capture card to the default playback device.
@@ -3136,6 +3140,10 @@ void Application::Shutdown()
     m_running = false;
     if (m_webviewSettings) m_webviewSettings->DispatchPendingMessages(/*closing=*/true);
     if (m_window) m_window->SetVideoAvailable(false);
+    if (m_audioRouter) {
+        m_audioRouter->Shutdown();
+        m_audioRouter.reset();
+    }
     m_4kxPoller.Stop();
 
     // Stop the HDR source poller FIRST. Its worker thread can be mid-call
@@ -3156,10 +3164,6 @@ void Application::Shutdown()
         m_discord.reset();
     }
 
-    if (m_audioRouter) {
-        m_audioRouter->Shutdown();
-        m_audioRouter.reset();
-    }
 
     // Stop capture FIRST and explicitly close the device. The Elgato driver
     // can hold the device handle indefinitely if the process exits without

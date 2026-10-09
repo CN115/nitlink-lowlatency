@@ -304,6 +304,9 @@ bool AudioRouter::Initialize(const std::wstring& nameHint)
     // exactly that); make sure the previous worker is gone first.
     Shutdown();
 
+    m_focusGate = {};
+    m_exclusivePermitted = false;
+    m_exclusiveFailure.clear();
     m_nameHint = nameHint.empty() ? std::wstring(L"Elgato") : nameHint;
     m_setupFailureLogged = false;
     {
@@ -540,6 +543,9 @@ bool AudioRouter::SetupExclusive(IMMDevice* device, const WAVEFORMATEX* native, 
     hr=m_renderService->ReleaseBuffer(m_renderBufferFrames,AUDCLNT_BUFFERFLAGS_SILENT);
     if (FAILED(hr)) return fail(hr,L"release exclusive prime");
     ResetEvent(m_renderEvent);
+    // Activation can change while the driver is being initialized.
+    if (m_ownerWindow.load() && (!m_running.load() || !m_exclusiveRequested.load() || !OwnerIsForeground()))
+        return fail(E_ABORT,L"exclusive suspended before start (window inactive or closing)");
     hr=m_renderClient->Start();
     if (FAILED(hr)) return fail(hr,L"start exclusive stream");
     m_lastRenderEvent=std::chrono::steady_clock::now();
@@ -579,7 +585,7 @@ bool AudioRouter::SetupRender()
     const auto freeNative=[](WAVEFORMATEX* p) { CoTaskMemFree(p); };
     std::unique_ptr<WAVEFORMATEX,decltype(freeNative)> nativeOwner(native,freeNative);
     std::wstring exclusiveFailure;
-    if (m_exclusiveRequested.load()) {
+    if (m_exclusiveRequested.load() && m_exclusivePermitted.load()) {
         if (m_failedExclusiveDeviceId!=m_renderDeviceId) m_exclusiveFailure.clear();
         exclusiveFailure=m_exclusiveFailure;
         if (exclusiveFailure.empty()) {
@@ -589,6 +595,7 @@ bool AudioRouter::SetupRender()
             const auto deviceId=m_renderDeviceId;
             TeardownRender(); // release a partly initialized exclusive stream before shared fallback
             m_renderDeviceId=deviceId;
+            if (!m_running.load()) return false;
             if (FAILED(activate())) return false;
         }
         AudioLog(L"Exclusive fallback: "+exclusiveFailure);
@@ -651,6 +658,8 @@ bool AudioRouter::SetupRender()
            << L" ms, default " << (probe.normal ? std::to_wstring(double(probe.normal)*1000/native->nSamplesPerSec) : L"unknown")
            << L" ms | actual " << m_periodUs.load()/1000.0 << L" ms"
            << L" | capture " << DescribeFormat(m_captureFormat) << L" -> stream " << DescribeFormat(m_renderFormat);
+    if (m_exclusiveRequested.load() && !m_exclusivePermitted.load())
+        status << L" | exclusive suspended: window inactive, hidden, minimized or regaining focus";
     if (!exclusiveFailure.empty()) status << L" | exclusive fallback: " << exclusiveFailure;
     if (!lowPeriod) status << L" | fallback: " << probe.stage << L" " << HrString(probe.hr);
     { std::lock_guard<std::mutex> lock(m_endpointInfoMutex); m_endpointInfo=status.str(); }
@@ -823,6 +832,8 @@ void AudioRouter::RouteLoop()
     bool firstAttemptReported = false;
 
     while (m_running) {
+        // Run on the audio worker, even while the UI is in a modal move/size loop.
+        UpdateExclusiveFocus(OwnerIsForeground(),std::chrono::steady_clock::now());
         const bool ready = EnsureEndpoints();
 
         if (!firstAttemptReported) {
@@ -837,7 +848,7 @@ void AudioRouter::RouteLoop()
 
         if (!ready) {
             m_streaming = false;
-            std::this_thread::sleep_for(std::chrono::milliseconds(kRetryIntervalMs));
+            WaitForSingleObject(m_stopEvent,kRetryIntervalMs);
             continue;
         }
         m_streaming = true;
@@ -851,9 +862,12 @@ void AudioRouter::RouteLoop()
         if (wake == WAIT_OBJECT_0) break;
         if (wake == WAIT_FAILED) {
             AudioLog(L"WaitForMultipleObjects failed; retrying");
-            std::this_thread::sleep_for(std::chrono::milliseconds(kRetryIntervalMs));
+            WaitForSingleObject(m_stopEvent,kRetryIntervalMs);
             continue;
         }
+        // Release exclusive access before pumping again after an activation change.
+        UpdateExclusiveFocus(OwnerIsForeground(),std::chrono::steady_clock::now());
+        if (m_restartRender.load()) continue;
         if (!DrainCapture()) continue;
         const bool renderReady=wake==WAIT_OBJECT_0+2;
         if (m_exclusiveActive.load()) {
@@ -1148,6 +1162,24 @@ bool AudioRouter::FillRender(bool renderReady)
     PublishQueue(exclusive ? want : padding);
     m_winFillMin=std::min(m_winFillMin,m_fillMs.load()); m_winFillMax=std::max(m_winFillMax,m_fillMs.load());
     return true;
+}
+
+static bool IsAudioWindowForeground(HWND owner, HWND foreground) {
+    if (!owner || !IsWindow(owner) || !IsWindowVisible(owner) || IsIconic(owner)) return false;
+    // Includes hosted WebView controls and owned settings/dialog windows.
+    return foreground && (foreground==owner || IsChild(owner,foreground) ||
+                           GetAncestor(foreground,GA_ROOTOWNER)==owner);
+}
+
+bool AudioRouter::OwnerIsForeground() const {
+    return IsAudioWindowForeground(m_ownerWindow.load(),GetForegroundWindow());
+}
+
+void AudioRouter::UpdateExclusiveFocus(bool foreground, ExclusiveFocusGate::Clock::time_point now) {
+    const bool allowed=m_focusGate.Update(foreground,now);
+    if (m_exclusivePermitted.exchange(allowed)==allowed || !m_exclusiveRequested.load()) return;
+    if (allowed) m_retryExclusive=true; // a new foreground session may retry a previous fallback
+    m_restartRender=true;
 }
 
 void AudioRouter::SetExclusive(bool enabled) {

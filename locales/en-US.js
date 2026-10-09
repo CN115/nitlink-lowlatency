@@ -3,7 +3,7 @@
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['en-US'] = {
   "audio.exclusive": "Exclusive output (minimum period)",
-  "audio.exclusiveHelp": "Optional: takes over this playback device while routing audio; other apps cannot play through it. Automatically requests the driver minimum, with buffer alignment if required. Falls back to shared mode on failure. Turn off to release exclusive access.",
+  "audio.exclusiveHelp": "Optional: takes over this playback device while routing audio; other apps cannot play through it. Automatically requests the driver minimum, with buffer alignment if required. Falls back to shared mode on failure. Losing focus, minimizing or hiding the window releases exclusive access and uses shared audio; returning restores exclusive after 200 ms. Closing releases the device immediately. NitLink settings count as focused.",
   "audio.exclusiveAuto": "Exclusive: automatic driver minimum",
   "audio.block": "Actual block (not queue latency)",
   'audio.requested': "Requested queue",

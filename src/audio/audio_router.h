@@ -3,6 +3,7 @@
 #include <string>
 #include "drift_controller.h"
 #include "audio_convert.h"
+#include "exclusive_focus.h"
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -48,6 +49,7 @@ public:
     void SetMuted(bool muted);
     void SetLatency(int fifoMs, int renderMs, bool drift);
     void SetExclusive(bool enabled);
+    void SetOwnerWindow(HWND window) { m_ownerWindow = window; }
     bool ExclusiveActive() const { return m_exclusiveActive.load(); }
     uint32_t RenderQueueMs() const { return m_queueMs.load(); }
     int DriftPpm() const { return m_driftPpm.load(); }
@@ -94,6 +96,8 @@ private:
     bool SetupCapture();
     bool SetupRender();
     bool SetupExclusive(IMMDevice* device, const WAVEFORMATEX* native, std::wstring& failure);
+    bool OwnerIsForeground() const;
+    void UpdateExclusiveFocus(bool foreground, ExclusiveFocusGate::Clock::time_point now);
     void TeardownCapture();
     void TeardownRender();
 
@@ -133,6 +137,9 @@ private:
     std::atomic<int> m_fifoTargetMs{12}, m_renderQueueTargetMs{10};
     std::atomic<bool> m_driftEnabled{true};
     std::atomic<bool> m_exclusiveRequested{false}, m_exclusiveActive{false}, m_retryExclusive{false};
+    std::atomic<HWND> m_ownerWindow{nullptr};
+    std::atomic<bool> m_exclusivePermitted{false};
+    ExclusiveFocusGate m_focusGate;
     std::wstring m_exclusiveFailure, m_failedExclusiveDeviceId;
     std::chrono::steady_clock::time_point m_lastRenderEvent{};
     std::atomic<uint32_t> m_queueMs{0}, m_periodUs{0};
