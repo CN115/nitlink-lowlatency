@@ -1,3 +1,5 @@
+> **CN115 audio-lab 1:** experimental audio latency fork. See [AUDIO_TESTING.txt](AUDIO_TESTING.txt) for settings, pipeline details, limitations and Windows testing. Upstream performance and hardware validation below do not validate this fork.
+
 <p align="center">
   <img src="docs/images/readme-hero.png" alt="NitLink" width="900">
 </p>
