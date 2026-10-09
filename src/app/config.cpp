@@ -378,6 +378,9 @@ bool Config::Load(const std::string& path)
         if (key == "pip_x")           pipX         = ParseI32(val, pipX, -100000, 100000);
         if (key == "pip_y")           pipY         = ParseI32(val, pipY, -100000, 100000);
         if (key == "audio_volume")    audioVolume  = ParseFloatClamped(val, audioVolume, 0.0f, 1.0f);
+        if (key == "audio_fifo_ms")   audioFifoMs = ParseI32(val, audioFifoMs, 3, 100);
+        if (key == "audio_render_ms") audioRenderMs = ParseI32(val, audioRenderMs, 3, 100);
+        if (key == "audio_drift")     audioDrift = ParseBool(val);
         if (key == "audio_muted")     audioMuted   = ParseBool(val);
         if (key == "color_expansion") colorExpansion = ParseBool(val);
         if (key == "nis_enabled")     nisEnabled   = ParseBool(val);
@@ -581,7 +584,10 @@ bool Config::Save(const std::string& path)
     file << "pip_x = "       << pipX       << "\n";
     file << "pip_y = "       << pipY       << "\n\n";
 
-    file << "# Audio\n";
+    file << "# Audio (buffer targets in ms; device period may raise render minimum)\n";
+    file << "audio_fifo_ms = " << std::clamp(audioFifoMs, 3, 100) << "\n";
+    file << "audio_render_ms = " << std::clamp(audioRenderMs, 3, 100) << "\n";
+    file << "audio_drift = " << (audioDrift ? "true" : "false") << "\n";
     file << "audio_volume = " << audioVolume << "\n";
     file << "audio_muted = "  << (audioMuted ? "true" : "false") << "\n\n";
 
