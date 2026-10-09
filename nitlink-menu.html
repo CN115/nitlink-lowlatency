@@ -38,6 +38,7 @@
     a { color: var(--accent-text); }
     a:hover { color: var(--accent); }
     ::selection { background: var(--accent-soft); }
+#pane-audio .audio-note { font-size:12px; line-height:1.6; white-space:pre-line; overflow-wrap:anywhere; padding:8px 16px; color:var(--text); }
     .rail, .metabar, #pane-video, #pane-audio, #pane-shortcuts {
       -webkit-user-select: none;
       user-select: none;
@@ -610,6 +611,17 @@
               <span class="slider-val" id="slider-volume-val">100</span>
             </div>
           </div>
+
+          <div class="band"><span class="band-title" data-i18n="audio.latencyTitle"></span><span class="band-hint">CN115 audio-lab 1</span></div>
+          <div class="row"><label class="row-name" for="audio-fifo" data-i18n="audio.fifo"></label>
+            <input id="audio-fifo" type="number" min="3" max="100" step="1" value="12" style="width:80px"> ms</div>
+          <div class="row"><label class="row-name" for="audio-render" data-i18n="audio.render"></label>
+            <input id="audio-render" type="number" min="3" max="100" step="1" value="10" style="width:80px"> ms</div>
+          <div class="row"><label class="row-name" for="audio-drift" data-i18n="audio.drift"></label>
+            <input id="audio-drift" type="checkbox" checked></div>
+          <p class="audio-note" data-i18n="audio.help"></p>
+          <div class="row"><span class="row-name" data-i18n="audio.health"></span><button id="audio-refresh" type="button" data-i18n="audio.refresh"></button></div>
+          <p id="audio-health" class="audio-note" role="status" aria-live="polite"></p>
         </section>
 
         <section class="pane" id="pane-shortcuts">
