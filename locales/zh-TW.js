@@ -1,6 +1,15 @@
 // NitLink Traditional Chinese (Taiwan) UI resource.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['zh-TW'] = {
+  "audio.driftHelp": "自動補償擷取與播放裝置的時鐘偏差，緩解長時間播放的積壓或欠載；異常持續時會重載音訊。不會自動提高 FIFO 目標。",
+  "audio.renderHelp": "共用模式下的播放佇列目標。實際最小值取決於 Windows 與音效卡驅動；獨占模式自動使用驅動最小週期，此項暫時無法調整。",
+  "audio.fifoHelp": "擷取與播放之間的緩衝目標，範圍為 3–100 ms。數值越低，延遲越小，對送包與排程抖動也越敏感。修改會短暫重啟音訊。",
+  "audio.sharedMode": "共用",
+  "audio.exclusiveMode": "獨占",
+  "audio.status": "播放狀態",
+  "audio.debugHelp": "顯示 FIFO 水位、時鐘漂移、欠載計數與裝置參數。僅控制顯示，不影響音訊處理或統計。每次啟動預設關閉。",
+  "audio.debug": "顯示除錯資訊",
+  "audio.moreHelp": "查看說明",
   "audio.clockEstimate": "時鐘漂移估計",
   "audio.clockLearning": "估計中／無法使用",
   "audio.underrunEvents": "欠載次數",
@@ -28,7 +37,7 @@ window.NitLinkLocales['zh-TW'] = {
   "audio.endpoint.18": "幀",
 
   "audio.exclusive": "獨占輸出（最小週期）",
-  "audio.exclusiveHelp": "選用：播放期間獨占此輸出裝置，其他程式無法同時使用。自動申請驅動最小週期，必要時依緩衝對齊調整；失敗回退共用模式。失焦、最小化或隱藏時自動釋放獨占並改用共用音訊；回到前景 200 毫秒後恢復獨占。關閉程式立即釋放裝置，NitLink 設定面板仍視為前景。",
+  "audio.exclusiveHelp": "自動使用音效卡支援的最小週期；獨占期間其他程式無法同時使用此輸出裝置。失焦時切回共用，返回前景後恢復；開啟失敗則回退共用。",
   "audio.exclusiveAuto": "獨占：自動使用驅動最小值",
   "audio.block": "實際區塊（非佇列延遲）",
   'audio.requested': "設定播放佇列",
@@ -36,7 +45,7 @@ window.NitLinkLocales['zh-TW'] = {
   'audio.afterPump': "處理後佔用，非端到端延遲",
   'audio.average': "一秒平均／範圍",
   'audio.driftOn': "漂移補償開啟",
-  'audio.latencyTitle': "音訊低延遲實驗室",
+  "audio.latencyTitle": "延遲與同步",
   'audio.fifo': "擷取 FIFO 目標",
   'audio.render': "播放佇列目標",
   'audio.drift': "自適應時鐘漂移補償",

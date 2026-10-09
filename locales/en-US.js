@@ -2,6 +2,15 @@
 // language for every locale and for every missing individual translation.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['en-US'] = {
+  "audio.driftHelp": "Compensates for clock differences between capture and playback to reduce long-term backlog or underruns. Persistent faults reload audio. The FIFO target never increases automatically.",
+  "audio.renderHelp": "Playback queue target in shared mode. Windows and the driver determine the actual minimum. Exclusive mode uses the driver minimum period automatically, so this control is disabled.",
+  "audio.fifoHelp": "Buffer target between capture and playback, from 3–100 ms. Lower values reduce latency but are more sensitive to packet and scheduling jitter. Changes briefly restart audio.",
+  "audio.sharedMode": "Shared",
+  "audio.exclusiveMode": "Exclusive",
+  "audio.status": "Playback status",
+  "audio.debugHelp": "Show FIFO levels, clock drift, underrun counters and device details. This only changes visibility, not audio processing or statistics. Off at each startup.",
+  "audio.debug": "Show diagnostics",
+  "audio.moreHelp": "Show help",
   "audio.clockEstimate": "Clock estimate",
   "audio.clockLearning": "Learning / unavailable",
   "audio.underrunEvents": "Underrun events",
@@ -29,7 +38,7 @@ window.NitLinkLocales['en-US'] = {
   "audio.endpoint.18": "frames",
 
   "audio.exclusive": "Exclusive output (minimum period)",
-  "audio.exclusiveHelp": "Optional: takes over this playback device while routing audio; other apps cannot play through it. Automatically requests the driver minimum, with buffer alignment if required. Falls back to shared mode on failure. Losing focus, minimizing or hiding the window releases exclusive access and uses shared audio; returning restores exclusive after 200 ms. Closing releases the device immediately. NitLink settings count as focused.",
+  "audio.exclusiveHelp": "Uses the lowest period supported by the sound device. Other apps cannot share this output while exclusive mode is active. Losing focus switches to shared mode; returning restores exclusive mode. Setup failures fall back to shared.",
   "audio.exclusiveAuto": "Exclusive: automatic driver minimum",
   "audio.block": "Actual block (not queue latency)",
   'audio.requested': "Requested queue",
@@ -37,7 +46,7 @@ window.NitLinkLocales['en-US'] = {
   'audio.afterPump': "after pump, not end-to-end latency",
   'audio.average': "1 s average / range",
   'audio.driftOn': "Drift on",
-  'audio.latencyTitle': "Audio latency lab",
+  "audio.latencyTitle": "Latency & sync",
   'audio.fifo': "Capture FIFO target",
   'audio.render': "Render queue target",
   'audio.drift': "Adaptive clock drift correction",

@@ -21,7 +21,7 @@ for (const locale of locales) {
   }
 }
 const html = fs.readFileSync(path.join(root, 'nitlink-menu.html'), 'utf8');
-for (const [, key] of html.matchAll(/data-i18n(?:-title|-aria-label)?="([^"]+)"/g)) {
+for (const [, key] of html.matchAll(/(?:data-i18n(?:-title|-aria-label)?|data-audio-help)="([^"]+)"/g)) {
   assert.ok(keys.includes(key), 'HTML references missing translation: ' + key);
 }
 const cpp = fs.readFileSync(path.join(root, 'src/app/localization.cpp'), 'utf8');

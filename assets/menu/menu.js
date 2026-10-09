@@ -146,6 +146,54 @@
     document.getElementById('audio-drift')?.addEventListener('change', e => post('setAudioDrift', e.target.checked));
     document.getElementById('audio-refresh')?.addEventListener('click', () => post('ready'));
 
+    // Diagnostics are a presentation preference, off at every application start.
+    // Hiding the panel never changes audio processing or cumulative counters.
+    document.getElementById('audio-debug')?.addEventListener('change', e => {
+      document.getElementById('audio-diagnostics').hidden = !e.target.checked;
+      e.target.setAttribute('aria-expanded', String(e.target.checked));
+    });
+
+    // Small help buttons support pointer hover, keyboard focus and touch/click.
+    // A fixed tooltip stays inside the viewport even in the narrow side panel.
+    (() => {
+      const tip = document.getElementById('audio-tooltip');
+      let anchor = null, hideTimer;
+      const hide = () => { clearTimeout(hideTimer); tip.hidden = true; anchor = null; };
+      const hideSoon = () => { clearTimeout(hideTimer); hideTimer = setTimeout(hide, 150); };
+      const show = button => {
+        clearTimeout(hideTimer);
+        anchor = button;
+        tip.textContent = t(button.dataset.audioHelp);
+        tip.hidden = false;
+        const rect = button.getBoundingClientRect();
+        const left = Math.max(12, Math.min(rect.left, window.innerWidth-tip.offsetWidth-12));
+        const below = rect.bottom+8;
+        const top = below+tip.offsetHeight <= window.innerHeight-12 ? below : Math.max(12,rect.top-tip.offsetHeight-8);
+        tip.style.left = `${left}px`; tip.style.top = `${top}px`;
+      };
+      document.querySelectorAll('[data-audio-help]').forEach(button => {
+        button.addEventListener('mouseenter', () => show(button));
+        button.addEventListener('mouseleave', e => {
+          if (document.activeElement !== button && e.relatedTarget !== tip) hideSoon();
+        });
+        button.addEventListener('focus', () => show(button));
+        button.addEventListener('blur', hide);
+        button.addEventListener('click', () => show(button));
+      });
+      tip.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+      tip.addEventListener('mouseleave', () => {
+        if (document.activeElement !== anchor) hideSoon();
+      });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+      document.addEventListener('click', e => {
+        if (anchor && e.target !== anchor && !tip.contains(e.target)) hide();
+      });
+      document.addEventListener('scroll', () => {
+        if (anchor && document.activeElement === anchor) show(anchor); else hide();
+      }, true);
+      window.addEventListener('resize', hide);
+    })();
+
     document.addEventListener('click', e => {
       let actionEl = e.target.closest('[data-action]');
       if (!actionEl || actionEl.classList.contains('slider')) return;
@@ -742,6 +790,9 @@
       if (renderInput) renderInput.disabled = s.audioExclusiveActive === true;
       const driftInput = document.getElementById('audio-drift');
       if (driftInput && typeof s.audioDrift === 'boolean') driftInput.checked = s.audioDrift;
+      setText('audio-status', s.audioStreaming
+        ? `${t('audio.running')} · ${t(s.audioExclusiveActive ? 'audio.exclusiveMode' : 'audio.sharedMode')}`
+        : t('audio.waiting'));
       const health = document.getElementById('audio-health');
       if (health && typeof s.audioFillMs === 'number') {
         const ms = value => Number.isFinite(value) ? value.toFixed(2) : '--';
