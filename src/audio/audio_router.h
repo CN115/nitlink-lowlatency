@@ -47,6 +47,8 @@ public:
     void SetVolume(float volume); // 0.0 - 1.0
     void SetMuted(bool muted);
     void SetLatency(int fifoMs, int renderMs, bool drift);
+    void SetExclusive(bool enabled);
+    bool ExclusiveActive() const { return m_exclusiveActive.load(); }
     uint32_t RenderQueueMs() const { return m_queueMs.load(); }
     int DriftPpm() const { return m_driftPpm.load(); }
     uint32_t RenderPeriodUs() const { return m_periodUs.load(); }
@@ -91,6 +93,7 @@ private:
     bool FindCaptureDevice(const std::wstring& nameHint, ComPtr<IMMDevice>& outDevice);
     bool SetupCapture();
     bool SetupRender();
+    bool SetupExclusive(IMMDevice* device, const WAVEFORMATEX* native, std::wstring& failure);
     void TeardownCapture();
     void TeardownRender();
 
@@ -107,7 +110,7 @@ private:
     // then top the render endpoint up from it. Each returns false after a
     // stream error was handed to HandleStreamError.
     bool DrainCapture();
-    bool FillRender();
+    bool FillRender(bool renderReady = true);
     bool FifoReset(UINT32 bytesPerFrame, UINT32 samplesPerSec);
     void FifoPush(const BYTE* data, UINT32 frames, bool silent);
     UINT32 FifoPop(BYTE* out, UINT32 frames);
@@ -129,6 +132,9 @@ private:
     uint32_t m_occupancyPrevious = 0, m_occupancyMin = UINT32_MAX, m_occupancyMax = 0;
     std::atomic<int> m_fifoTargetMs{12}, m_renderQueueTargetMs{10};
     std::atomic<bool> m_driftEnabled{true};
+    std::atomic<bool> m_exclusiveRequested{false}, m_exclusiveActive{false}, m_retryExclusive{false};
+    std::wstring m_exclusiveFailure, m_failedExclusiveDeviceId;
+    std::chrono::steady_clock::time_point m_lastRenderEvent{};
     std::atomic<uint32_t> m_queueMs{0}, m_periodUs{0};
     std::atomic<int> m_driftPpm{0};
     std::atomic<uint64_t> m_resyncs{0};
@@ -164,7 +170,7 @@ private:
 
     // FIFO between the two endpoint clocks, in capture-format frames. The
     // capture and playback clocks drift. A filtered PI controller steers
-    // near-unity cubic resampling for float32/PCM16; rare formats use
+    // sinc resampling and format conversion; rare shared-mode formats use
     // filtered frame slips. All ring/phase/controller state is worker-owned.
     std::vector<BYTE> m_fifo;
     size_t   m_fifoHead      = 0;      // read offset, bytes
