@@ -370,7 +370,7 @@ bool Config::Load(const std::string& path)
         if (key == "window_width")    windowWidth  = ParseU32(val, windowWidth, 320, 16384);
         if (key == "window_height")   windowHeight = ParseU32(val, windowHeight, 240, 16384);
         if (key == "language") {
-            if (val == "system" || val == "en-US" || val == "zh-TW") language = val;
+            if (val == "system" || val == "en-US" || val == "zh-TW" || val == "zh-CN") language = val;
         }
         if (key == "pip_width")       pipWidth     = ParseU32(val, pipWidth, 80, 16384);
         if (key == "pip_height")      pipHeight    = ParseU32(val, pipHeight, 45, 16384);
@@ -571,7 +571,7 @@ bool Config::Save(const std::string& path)
     file << "# NitLink Configuration\n";
     file << "# https://github.com/nitlink-dev/nitlink\n\n";
 
-    file << "# Interface language: system | en-US | zh-TW\n";
+    file << "# Interface language: system | en-US | zh-TW | zh-CN\n";
     file << "language = " << language << "\n\n";
 
     file << "# Window\n";

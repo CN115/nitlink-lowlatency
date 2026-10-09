@@ -8,6 +8,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <script src="locales/en-US.js"></script>
   <script src="locales/zh-TW.js"></script>
+  <script src="locales/zh-CN.js"></script>
   <style>
     @font-face { font-family: 'Archivo'; font-style: normal; font-weight: 400; font-display: swap; src: url('assets/menu/Archivo-400.ttf') format('truetype'); }
     @font-face { font-family: 'Archivo'; font-style: normal; font-weight: 500; font-display: swap; src: url('assets/menu/Archivo-500.ttf') format('truetype'); }
@@ -46,6 +47,7 @@
       -webkit-user-select: none;
       user-select: none;
     }
+    :lang(zh-CN) { --sans: "Archivo", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; }
     button, select { font: inherit; }
     ::-webkit-scrollbar { width: 12px; }
     ::-webkit-scrollbar-track { background: #191919; }
@@ -569,6 +571,7 @@
                 <select class="language-select" id="language-select">
                   <option value="system" data-i18n="language.system"></option>
                   <option value="en-US" data-i18n="language.english"></option>
+                  <option value="zh-CN" data-i18n="language.simplifiedChinese"></option>
                   <option value="zh-TW" data-i18n="language.traditionalChinese"></option>
                 </select>
               </div>
@@ -615,7 +618,7 @@
             </div>
           </div>
 
-          <div class="band"><span class="band-title" data-i18n="audio.latencyTitle"></span><span class="band-hint">CN115 v0.1.0</span></div>
+          <div class="band"><span class="band-title" data-i18n="audio.latencyTitle"></span><span class="band-hint">CN115 v0.1.1</span></div>
           <div class="row"><label class="row-name" for="audio-exclusive" data-i18n="audio.exclusive"></label>
             <div class="row-right end"><input id="audio-exclusive" type="checkbox"></div></div>
           <p class="audio-note" data-i18n="audio.exclusiveHelp"></p>
@@ -664,9 +667,9 @@
         <section class="pane" id="pane-about">
           <div class="band">
             <span class="band-title" data-i18n="section.about"></span>
-            <span class="band-hint">v1.2.3</span>
+            <span class="band-hint">CN115 v0.1.1</span>
           </div>
-          <div class="row kv"><span class="row-name" data-i18n="about.build"></span><span class="row-value">1.2.3</span></div>
+          <div class="row kv"><span class="row-name" data-i18n="about.build"></span><span class="row-value">CN115 0.1.1</span></div>
           <div class="row kv"><span class="row-name" data-i18n="about.renderer"></span><span class="row-value">D3D11 · P010 / NV12 / BGRA</span></div>
           <div class="about-copy">
             <p data-i18n="about.description"></p>

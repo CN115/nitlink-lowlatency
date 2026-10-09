@@ -224,7 +224,7 @@ std::optional<SettingsMessage> ParseSettingsMessage(std::wstring_view json) {
             return std::nullopt;
         result.text = value->text;
         if (action == L"setLanguage") {
-            if (!OneOf(result.text, {L"system", L"en-US", L"zh-TW"})) return std::nullopt;
+            if (!OneOf(result.text, {L"system", L"en-US", L"zh-TW", L"zh-CN"})) return std::nullopt;
         } else if (action == L"setNoSignalMode") {
             if (!OneOf(result.text, {L"default", L"image"})) return std::nullopt;
         } else if (action == L"setNoSignalFit") {

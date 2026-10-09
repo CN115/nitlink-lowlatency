@@ -1,4 +1,7 @@
-NitLink CN115 v0.1.0 — Windows x64 测试版
+简体中文：F1 → 视频 → 面板 → 语言 → 简体中文。
+简体中文 Windows 在“系统默认”下自动使用中文。
+
+NitLink CN115 v0.1.1 — Windows x64 测试版
 基于 nitlink-dev/nitlink d522bdc，接续 audio-lab 3。第三方实验 fork。
 
 首个发布版本：独占模式随窗口激活状态自动释放/恢复

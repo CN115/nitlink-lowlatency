@@ -8,16 +8,20 @@
       const locales = (window.navigator && window.navigator.languages && window.navigator.languages.length)
         ? window.navigator.languages
         : [window.navigator && window.navigator.language];
-      return locales.some(locale => typeof locale === 'string' &&
-        ['zh-tw', 'zh-hant-tw'].includes(locale.toLowerCase()))
-        ? 'zh-TW' : 'en-US';
+      for (const locale of locales) {
+        if (typeof locale !== 'string') continue;
+        const tag = locale.toLowerCase();
+        if (['zh-cn', 'zh-sg', 'zh-hans'].includes(tag) || tag.startsWith('zh-hans-')) return 'zh-CN';
+        if (['zh-tw', 'zh-hant-tw'].includes(tag)) return 'zh-TW';
+      }
+      return 'en-US';
     };
     const standaloneLanguageKey = 'nitlink.languagePreference';
     const standalonePreference = (() => {
       if (hasWebViewHost()) return 'system';
       try {
         const saved = window.localStorage.getItem(standaloneLanguageKey);
-        return ['system', 'en-US', 'zh-TW'].includes(saved) ? saved : 'system';
+        return ['system', 'en-US', 'zh-TW', 'zh-CN'].includes(saved) ? saved : 'system';
       } catch (_) {
         return 'system';
       }
@@ -28,6 +32,30 @@
       const value = selected[key] || englishLocale[key];
       return (typeof value === 'string' && value.length > 0) ? value : key;
     };
+    // Translate display-only endpoint labels; raw driver diagnostics stay available in logs.
+    const endpointLabels = [
+      ["exclusive suspended: window inactive, hidden, minimized or regaining focus", "audio.endpoint.0"],
+      ["Compatibility shared (Windows conversion)", "audio.endpoint.1"],
+      ["Native shared low-period", "audio.endpoint.2"],
+      ["Waiting for playback endpoint", "audio.endpoint.3"],
+      ["Exclusive event", "audio.endpoint.4"],
+      ["driver alignment applied", "audio.endpoint.5"],
+      ["driver stream latency", "audio.endpoint.6"],
+      ["exclusive fallback:", "audio.endpoint.7"],
+      ["exclusive min", "audio.endpoint.8"],
+      ["native min", "audio.endpoint.9"],
+      ["actual block", "audio.endpoint.10"],
+      ["requested", "audio.endpoint.11"],
+      ["default", "audio.endpoint.12"],
+      ["actual", "audio.endpoint.13"],
+      ["capture", "audio.endpoint.14"],
+      ["stream", "audio.endpoint.15"],
+      ["unknown", "audio.endpoint.16"],
+      ["fallback:", "audio.endpoint.17"],
+      ["frames", "audio.endpoint.18"]
+    ];
+    const localizeEndpointInfo = info => endpointLabels.reduce(
+      (text, [phrase, key]) => text.split(phrase).join(t(key)), String(info || ""));
     const applyTranslations = locale => {
       currentLocale = localeResources[locale] ? locale : 'en-US';
       document.documentElement.lang = currentLocale;
@@ -50,7 +78,7 @@
       const h1 = document.querySelector('.topbar h1');
       if (h1 && titleKey) h1.textContent = t(titleKey);
       const language = document.getElementById('language-select');
-      if (language && language.value !== 'system' && language.value !== 'en-US' && language.value !== 'zh-TW') {
+      if (language && language.value !== 'system' && language.value !== 'en-US' && language.value !== 'zh-TW' && language.value !== 'zh-CN') {
         language.value = 'system';
       }
     };
@@ -64,8 +92,7 @@
     // A real NitLink host will immediately push its effective locale. When
     // this file is opened directly for static testing, use the browser-local
     // preference instead so the language selector still has visible effect.
-    const standaloneLocale = standalonePreference === 'zh-TW' ? 'zh-TW'
-      : standalonePreference === 'en-US' ? 'en-US' : detectStandaloneLocale();
+    const standaloneLocale = standalonePreference === 'system' ? detectStandaloneLocale() : standalonePreference;
     applyTranslations(standaloneLocale);
 
     // Rail navigation. Every pane stays in the DOM so applyState can keep
@@ -100,8 +127,7 @@
       if (!hasWebViewHost()) languageSelect.value = standalonePreference;
       languageSelect.addEventListener('change', () => {
         const preference = languageSelect.value;
-        applyTranslations(preference === 'zh-TW' ? 'zh-TW'
-          : preference === 'en-US' ? 'en-US' : detectStandaloneLocale());
+        applyTranslations(preference === 'system' ? detectStandaloneLocale() : preference);
         if (!hasWebViewHost()) {
           try { window.localStorage.setItem(standaloneLanguageKey, preference); } catch (_) {}
         }
@@ -726,7 +752,7 @@
           `FIFO ${t('audio.average')} ${ms(s.audioAverageMs)} ms [${ms(s.audioMinMs)}–${ms(s.audioMaxMs)}]\n` +
           `${t('audio.period')} ${ms(s.audioPeriodUs / 1000)} ms · ${t('audio.correction')} ${s.audioPpm} ppm\n` +
           `${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}\n` +
-          (s.audioEndpointInfo || '');
+          localizeEndpointInfo(s.audioEndpointInfo);
       }
 
       if (typeof s.volume === 'number') {
