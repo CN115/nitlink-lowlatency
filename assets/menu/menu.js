@@ -109,6 +109,16 @@
       });
     }
 
+    for (const [id, action] of [['audio-fifo','setAudioFifoMs'], ['audio-render','setAudioRenderMs']]) {
+      document.getElementById(id)?.addEventListener('change', e => {
+        const n = Number(e.target.value);
+        if (!Number.isInteger(n) || n < 3 || n > 100) { e.target.reportValidity(); return; }
+        post(action, n);
+      });
+    }
+    document.getElementById('audio-drift')?.addEventListener('change', e => post('setAudioDrift', e.target.checked));
+    document.getElementById('audio-refresh')?.addEventListener('click', () => post('ready'));
+
     document.addEventListener('click', e => {
       let actionEl = e.target.closest('[data-action]');
       if (!actionEl || actionEl.classList.contains('slider')) return;
@@ -556,7 +566,17 @@
         e.stopPropagation();
         togglePop();
       });
-      document.addEventListener('click', e => {
+      for (const [id, action] of [['audio-fifo','setAudioFifoMs'], ['audio-render','setAudioRenderMs']]) {
+      document.getElementById(id)?.addEventListener('change', e => {
+        const n = Number(e.target.value);
+        if (!Number.isInteger(n) || n < 3 || n > 100) { e.target.reportValidity(); return; }
+        post(action, n);
+      });
+    }
+    document.getElementById('audio-drift')?.addEventListener('change', e => post('setAudioDrift', e.target.checked));
+    document.getElementById('audio-refresh')?.addEventListener('click', () => post('ready'));
+
+    document.addEventListener('click', e => {
         if (!pop.contains(e.target) && !trigger.contains(e.target)) closePop();
       });
       document.addEventListener('keydown', e => {
@@ -695,6 +715,18 @@
           s.presentPacing === 'captured' ? t('value.captureRate')      : t('value.displayRefresh'));
       }
       setToggle('toggle-mute', s.audioMuted);
+      for (const [id, key] of [['audio-fifo','audioFifoMs'], ['audio-render','audioRenderMs']]) {
+        const input = document.getElementById(id);
+        if (input && document.activeElement !== input && Number.isFinite(s[key])) input.value = s[key];
+      }
+      const driftInput = document.getElementById('audio-drift');
+      if (driftInput && typeof s.audioDrift === 'boolean') driftInput.checked = s.audioDrift;
+      const health = document.getElementById('audio-health');
+      if (health && typeof s.audioFillMs === 'number') {
+        health.textContent = `${s.audioStreaming ? t('audio.running') : t('audio.waiting')} · ${s.audioDrift ? (s.audioAdaptive ? 'Cubic ASRC' : t('audio.fallback')) : t('audio.off')}\n` +
+          `FIFO ${s.audioFillMs} ms + ${t('audio.queued')} ${s.audioQueueMs} ms · ${t('audio.period')} ${(s.audioPeriodUs / 1000).toFixed(2)} ms\n` +
+          `${t('audio.correction')} ${s.audioPpm} ppm · ${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}`;
+      }
 
       if (typeof s.volume === 'number') {
         const slider = document.getElementById('slider-volume');
