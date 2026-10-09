@@ -2,6 +2,23 @@
 // language for every locale and for every missing individual translation.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['en-US'] = {
+  'audio.latencyTitle': "Audio latency lab",
+  'audio.fifo': "Capture FIFO target",
+  'audio.render': "Render queue target",
+  'audio.drift': "Adaptive clock drift correction",
+  'audio.help': "Changes apply immediately with a short audio restart. Start at 12 / 10 ms; lower in small steps. If gaps occur, raise both buffers. Windows may impose a higher render minimum. Queue readings exclude card, USB, mixer, and device latency.",
+  'audio.health': "Live audio health",
+  'audio.refresh': "Refresh",
+  'audio.running': "Streaming",
+  'audio.waiting': "Waiting for devices",
+  'audio.fallback': "Filtered frame slips",
+  'audio.off': "Drift off",
+  'audio.queued': "render",
+  'audio.period': "engine period",
+  'audio.correction': "Correction",
+  'audio.underruns': "Missing frames",
+  'audio.dropped': "Dropped frames",
+  'audio.resyncs': "Resyncs",
   'page.settings': 'NitLink · Settings',
   'nav.video': 'Video',
   'nav.audio': 'Audio',
