@@ -4924,8 +4924,14 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"audioRenderMs\":" << m_config->audioRenderMs << L",";
     js << L"\"audioDrift\":" << (m_config->audioDrift ? L"true" : L"false") << L",";
     if (m_audioRouter) {
-        js << L"\"audioFillMs\":" << m_audioRouter->FifoFillMs() << L",";
-        js << L"\"audioQueueMs\":" << m_audioRouter->RenderQueueMs() << L",";
+        const uint64_t audioQueues=m_audioRouter->QueueSnapshotUs();
+        js << L"\"audioFillMs\":" << (audioQueues >> 32) / 1000.0 << L",";
+        js << L"\"audioQueueMs\":" << static_cast<uint32_t>(audioQueues) / 1000.0 << L",";
+        js << L"\"audioEffectiveMs\":" << m_audioRouter->EffectiveQueueUs() / 1000.0 << L",";
+        js << L"\"audioAverageMs\":" << m_audioRouter->FifoAverageUs() / 1000.0 << L",";
+        js << L"\"audioMinMs\":" << m_audioRouter->FifoMinUs() / 1000.0 << L",";
+        js << L"\"audioMaxMs\":" << m_audioRouter->FifoMaxUs() / 1000.0 << L",";
+        js << L"\"audioEndpointInfo\":\"" << JsonEscapeWide(m_audioRouter->EndpointInfo()) << L"\",";
         js << L"\"audioPeriodUs\":" << m_audioRouter->RenderPeriodUs() << L",";
         js << L"\"audioPpm\":" << m_audioRouter->DriftPpm() << L",";
         js << L"\"audioUnderruns\":" << m_audioRouter->Underruns() << L",";
