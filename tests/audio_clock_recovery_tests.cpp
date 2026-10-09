@@ -35,7 +35,7 @@ int main() {
     Check(!jump.Valid(3),"backwards QPC invalidates estimate");
 
     // Closed-loop occupancy: no reserve adaptation. Re-prime periodically,
-    // retaining the estimate, rather than restarting correction from zero.
+    // retaining the clock feed-forward and protective negative feedback.
     for (double skew : {-1000.0,1000.0}) {
       DriftController controller;
       double error=0,previous=0,ppm=0;
@@ -46,9 +46,9 @@ int main() {
         Check(std::abs(ppm)<=2000,"total correction remains bounded");
         Check(std::abs(ppm-previous)<=400*dt+1e-7,"feed-forward obeys slew limit");
         previous=ppm;
-        if (i>10000 && i%1000==0) controller.Reprime();
+        if (i>10000 && i%1000==0) { controller.Reprime(); previous=controller.Update(0,0); }
       }
-      Check(std::abs(ppm-skew)<20 && std::abs(error)<.0002,"retained estimate settles to fixed FIFO target");
+      Check(std::abs(ppm-skew)<20 && std::abs(error)<.0002,"retained clock estimate settles to fixed FIFO target");
     }
     AudioRecoveryGuard guard;
     Check(!guard.Observe(0,0,.001,.003),"isolated underrun does not reload");

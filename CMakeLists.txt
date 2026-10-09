@@ -178,6 +178,10 @@ if(BUILD_TESTING)
     target_include_directories(NitLinkAudioClockRecoveryTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME audio_clock_recovery COMMAND NitLinkAudioClockRecoveryTests)
 
+    add_executable(NitLinkAudioPacketDriftTests tests/audio_packet_drift_tests.cpp)
+    target_include_directories(NitLinkAudioPacketDriftTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME audio_packet_drift COMMAND NitLinkAudioPacketDriftTests)
+
     add_executable(NitLinkAudioDriftTests tests/audio_drift_tests.cpp)
     target_include_directories(NitLinkAudioDriftTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME audio_clock_drift COMMAND NitLinkAudioDriftTests)

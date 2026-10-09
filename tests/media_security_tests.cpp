@@ -114,6 +114,35 @@ public:
 };
 namespace NitLink {
 struct AudioRouterTestAccess {
+    static void PacketDrift() {
+        WAVEFORMATEX pcm{WAVE_FORMAT_PCM,2,48000,192000,4,16,0};
+        ExclusiveState state; state.frames=144; state.minimum=30000;
+        FakeDevice device(state); AudioRouter router;
+        router.SetLatency(3,3,true);
+        router.m_captureFormat=CloneWaveFormat(&pcm);
+        Check(router.FifoReset(4,48000),"packet regression FIFO");
+        std::wstring failure;
+        Check(router.SetupExclusive(&device,&pcm,failure),"packet regression exclusive setup");
+        router.m_restartCapture=false;
+        std::vector<int16_t> packet(480*2,12000);
+        int nextPacketMs=10;
+        uint64_t settledUnderruns=0;
+        // Exercise the real ring, phase, FIR and FillRender path. Fake only the
+        // endpoint and elapsed control time; there is no real-time test sleep.
+        for (int i=1;i<=6000;++i) {
+            while (nextPacketMs<=i*3) {
+                router.FifoPush(reinterpret_cast<const BYTE*>(packet.data()),480,false);
+                nextPacketMs+=10;
+            }
+            router.m_lastDrift=std::chrono::steady_clock::now()-std::chrono::milliseconds(3);
+            Check(router.FillRender(true),"packetized exclusive pump");
+            if (i==1000) settledUnderruns=router.Underruns();
+            if (i>1000) Check(router.Underruns()==settledUnderruns,"drift must not repeatedly starve packetized audio");
+        }
+        Check(router.Overruns()==0 && !router.m_restartCapture,"no trim/reload hides packet drift failures");
+        Check(router.m_fifoTargetMs==3 && router.m_renderQueueTargetMs==3,"packet guard preserves user targets");
+        router.TeardownRender(); router.TeardownCapture();
+    }
     static void Recovery() {
         AudioRouter router;
         router.SetLatency(3,3,true);
@@ -219,6 +248,9 @@ struct AudioRouterTestAccess {
         router.m_fifoBytes=router.m_sinc.History()*4;
         Check(router.FillRender(true) && state.lastFlags==AUDCLNT_BUFFERFLAGS_SILENT && router.Underruns()==48,
             "starvation releases a whole silent block and reprimes");
+        router.m_driftEnabled=false; router.m_fifoPrimed=true;
+        Check(router.FillRender(true) && router.Underruns()==96 && router.DriftPpm()==0,
+            "disabling correction must not disable underrun accounting");
         state.getError=AUDCLNT_E_BUFFER_ERROR;
         Check(!router.FillRender(true) && router.m_restartRender && !router.m_exclusiveFailure.empty(),
             "exclusive render error schedules shared fallback");
@@ -238,6 +270,7 @@ struct AudioRouterTestAccess {
     static void Run() {
         Focus();
         Exclusive();
+        PacketDrift();
         AudioRouter router;
         Check(!router.FifoReset(UINT32_MAX, UINT32_MAX), "FIFO allocation cap");
         Check(router.FifoReset(8, 48000), "valid FIFO");

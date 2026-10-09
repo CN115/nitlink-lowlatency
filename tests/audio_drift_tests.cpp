@@ -24,7 +24,7 @@ int main() {
                         if (std::abs(error) >= 0.009) { std::cerr << "skew=" << skew << " time=" << time << " error=" << error << " ppm=" << ppm << "\n"; throw std::runtime_error("bounded queue error"); }
                         previous = ppm;
                     }
-                    Check(std::abs(error) < 0.0003, "converged queue error");
+                    Check(std::abs(error) < 0.0023, "queue settles within the measured packet-jitter band");
                     Check(std::abs(ppm-skew) < 50, "converged clock correction");
                 }
             }

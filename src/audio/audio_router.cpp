@@ -1173,8 +1173,12 @@ bool AudioRouter::FillRender(bool renderReady)
     }
     const auto now=std::chrono::steady_clock::now();
     const double dt=std::chrono::duration<double>(now-m_lastDrift).count(); m_lastDrift=now;
+    // Count only samples available to the converter, not its FIR history or
+    // future taps. Observe the trough across packets before speeding up input.
+    const double headroom=(double(fill)-(m_conversionReady ? m_phase+lookahead : 0)
+        -want*baseRatio)/m_samplesPerSec;
     const double ppm=m_driftEnabled.load() ? m_drift.Update(
-        (double(fill)-history+padding*baseRatio-target)/m_samplesPerSec,dt,clockPpm) : 0;
+        (double(fill)-history+padding*baseRatio-target)/m_samplesPerSec,dt,clockPpm,headroom) : 0;
     m_driftPpm=int(std::lround(ppm));
     BYTE* out=nullptr;
     hr=m_renderService->GetBuffer(want,&out);
