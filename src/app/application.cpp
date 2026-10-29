@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <vector>       // FrameLevels histograms (HDR levels readout)
 #include <cstdint>      // fixed-width pixel-code types
+#include <cwchar>
 #include <cassert>      // assert: frame-buffer teardown invariant (worker joined)
 #include <debugapi.h>
 #include <shlobj.h>
@@ -31,6 +32,18 @@ namespace NitLink {
 
 static void AppLog(const std::wstring& msg) {
     OutputDebugStringW((L"[NitLink/App] " + msg + L"\n").c_str());
+}
+
+static const wchar_t* AudioPlaybackStateName(AudioPlaybackState state) {
+    switch (state) {
+    case AudioPlaybackState::Waiting: return L"waiting";
+    case AudioPlaybackState::Priming: return L"priming";
+    case AudioPlaybackState::Playing: return L"playing";
+    case AudioPlaybackState::Rebuffering: return L"rebuffering";
+    case AudioPlaybackState::CaptureStalled: return L"captureStalled";
+    case AudioPlaybackState::Recovering: return L"recovering";
+    }
+    return L"waiting";
 }
 
 static void PlaceholderLog(const std::wstring& msg) {
@@ -1291,6 +1304,10 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         }
         if (action == L"chooseNoSignalImage") {
             ChooseNoSignalImage();
+            return;
+        }
+        if (action == L"exportAudioTrace") {
+            ExportAudioTrace();
             return;
         }
         if (action == L"clearNoSignalImage" && m_config) {
@@ -4465,6 +4482,59 @@ bool Application::ApplyNoSignalSettings(bool forceReload)
     return loaded;
 }
 
+bool Application::ExportAudioTrace()
+{
+    if (!m_audioRouter || !m_window || m_audioTraceExporting) return false;
+    m_audioTraceExporting = true;
+    struct ExportGuard {
+        bool& active;
+        ~ExportGuard() { active = false; }
+    } guard{m_audioTraceExporting};
+    const auto failed = [this](const std::wstring& detail) {
+        AppLog(L"Audio trace export: " + detail);
+        ShowToast(Tr(L"toast.audioTraceFailed"), std::chrono::milliseconds(6000));
+        return false;
+    };
+
+    // The web message carries no filename. Only the native save dialog can
+    // choose a destination, including confirmation before an existing file is replaced.
+    ComPtr<IFileSaveDialog> dialog;
+    HRESULT hr = CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(&dialog));
+    if (FAILED(hr)) return failed(L"could not create the save dialog");
+    const std::wstring title = Tr(L"dialog.exportAudioTrace");
+    const std::wstring filter = Tr(L"dialog.audioTraceFilter");
+    const COMDLG_FILTERSPEC filters[] = {{filter.c_str(), L"*.csv"}};
+    FILEOPENDIALOGOPTIONS options{};
+    if (FAILED(dialog->GetOptions(&options)) ||
+        FAILED(dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+                                   FOS_OVERWRITEPROMPT | FOS_STRICTFILETYPES)) ||
+        FAILED(dialog->SetFileTypes(ARRAYSIZE(filters), filters)) ||
+        FAILED(dialog->SetFileTypeIndex(1)) || FAILED(dialog->SetDefaultExtension(L"csv")) ||
+        FAILED(dialog->SetTitle(title.c_str()))) return failed(L"could not configure the save dialog");
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    wchar_t filename[96]{};
+    swprintf_s(filename, L"nitlink-audio-%04u%02u%02u-%02u%02u%02u.csv",
+        unsigned(now.wYear), unsigned(now.wMonth), unsigned(now.wDay),
+        unsigned(now.wHour), unsigned(now.wMinute), unsigned(now.wSecond));
+    if (FAILED(dialog->SetFileName(filename))) return failed(L"could not set the suggested filename");
+    hr = dialog->Show(m_window->GetHWND());
+    if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return false;
+    if (FAILED(hr)) return failed(L"save dialog failed");
+    ComPtr<IShellItem> item;
+    if (FAILED(dialog->GetResult(&item)) || !item) return failed(L"no destination was selected");
+    PWSTR rawPath = nullptr;
+    hr = item->GetDisplayName(SIGDN_FILESYSPATH, &rawPath);
+    if (FAILED(hr) || !rawPath) return failed(L"selected destination has no filesystem path");
+    const std::filesystem::path path(rawPath);
+    CoTaskMemFree(rawPath);
+    std::string error;
+    if (!m_audioRouter->ExportTrace(path,error)) return failed(Utf8ToWide(error));
+    ShowToast(Tr(L"toast.audioTraceSaved"), std::chrono::milliseconds(5000));
+    return true;
+}
+
 bool Application::ChooseNoSignalImage()
 {
     if (!m_config || !m_window) return false;
@@ -5022,7 +5092,9 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"audioRenderMs\":" << m_config->audioRenderMs << L",";
     js << L"\"audioDrift\":" << (m_config->audioDrift ? L"true" : L"false") << L",";
     js << L"\"audioExclusive\":" << (m_config->audioExclusive ? L"true" : L"false") << L",";
+    js << L"\"audioTraceAvailable\":" << (m_audioRouter ? L"true" : L"false") << L",";
     if (m_audioRouter) {
+        js << L"\"audioPlaybackState\":\"" << AudioPlaybackStateName(m_audioRouter->PlaybackState()) << L"\",";
         js << L"\"audioExclusiveActive\":" << (m_audioRouter->ExclusiveActive() ? L"true" : L"false") << L",";
         const uint64_t audioQueues=m_audioRouter->QueueSnapshotUs();
         js << L"\"audioFillMs\":" << (audioQueues >> 32) / 1000.0 << L",";
@@ -5036,12 +5108,18 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
         js << L"\"audioPpm\":" << m_audioRouter->DriftPpm() << L",";
         js << L"\"audioEstimatedPpm\":" << m_audioRouter->EstimatedDriftPpm() << L",";
         js << L"\"audioClockValid\":" << (m_audioRouter->ClockEstimateValid() ? L"true" : L"false") << L",";
+        js << L"\"audioClockConfidence\":" << m_audioRouter->ClockConfidencePercent() << L",";
+        js << L"\"audioStartupSilence\":" << m_audioRouter->StartupSilenceFrames() << L",";
+        js << L"\"audioRebufferFrames\":" << m_audioRouter->RebufferFrames() << L",";
+        js << L"\"audioResetDiscardFrames\":" << m_audioRouter->ResetDiscardFrames() << L",";
+        js << L"\"audioLocalReprimes\":" << m_audioRouter->LocalReprimes() << L",";
         js << L"\"audioUnderrunEvents\":" << m_audioRouter->UnderrunEvents() << L",";
         js << L"\"audioReloads\":" << m_audioRouter->AutomaticReloads() << L",";
         js << L"\"audioUnderruns\":" << m_audioRouter->Underruns() << L",";
         js << L"\"audioOverruns\":" << m_audioRouter->Overruns() << L",";
         js << L"\"audioResyncs\":" << m_audioRouter->Resyncs() << L",";
         js << L"\"audioAdaptive\":" << (m_audioRouter->AdaptiveSupported() ? L"true" : L"false") << L",";
+        js << L"\"audioSrcBypassed\":" << (m_audioRouter->SrcBypassed() ? L"true" : L"false") << L",";
         js << L"\"audioStreaming\":" << (m_audioRouter->IsStreaming() ? L"true" : L"false") << L",";
     }
     js << L"\"volume\":"            << m_config->audioVolume        << L",";

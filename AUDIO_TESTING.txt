@@ -1,0 +1,18 @@
+NitLink CN115 audio reliability test build (based on upstream 1.2.5)
+
+Extract the complete ZIP and launch NitLink.exe on Windows x64.
+Existing FIFO and shared render targets are not automatically increased.
+Exclusive output still uses the supported minimum and falls back on focus loss.
+
+Suggested hardware checks:
+1. Use the same capture card, output, 3 ms FIFO and exclusive setting as before.
+2. Play for 10 minutes. Enable diagnostics only when inspecting counters.
+3. Test volume changes, mute/unmute, focus loss/return and closing the application.
+4. Interrupt/reconnect HDMI audio and switch the Windows output device.
+5. Separate missing frames from rebuffer silence and reset-discarded source frames.
+6. For timing analysis, restart audio, reproduce the problem and export a CSV.
+   NitLinkAudioReplay.exe trace.csv checks recorded control decisions.
+
+See docs/audio-diagnostics.md for counter definitions and trace limitations.
+BUILD.txt records the precise source commit; SHA256SUMS.txt verifies package files.
+No physical capture/output hardware is present on the automated build machine.

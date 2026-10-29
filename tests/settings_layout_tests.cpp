@@ -364,6 +364,51 @@ void TestLayouts(WebViewSettings& host, HWND window, std::vector<std::wstring>& 
             "navigation and localized state use the same hidden and visible controls");
     }
 }
+
+void TestAudioDiagnostics(WebViewSettings& host, std::vector<std::wstring>& messages) {
+    auto* view = WebViewSettingsTestAccess::View(host);
+    Check(Script(view, L"document.querySelector('#audio-diagnostics').hidden && !document.querySelector('#audio-debug').checked") == L"true",
+        "audio diagnostics remain hidden by default");
+    Check(Script(view, LR"JS((() => {
+        const keys = ['audio.priming','audio.rebuffering','audio.captureStalled','audio.recovering',
+            'audio.confidence','audio.localReprimes','audio.startupSilence','audio.rebufferFrames',
+            'audio.resetDiscardFrames','audio.srcBypass','audio.trace','audio.exportTrace',
+            'audio.traceHelp','audio.countersHelp'];
+        return ['en-US','zh-TW','zh-CN','de-DE','ko-KR'].every(locale =>
+            keys.every(key => typeof window.NitLinkLocales[locale][key] === 'string' &&
+                window.NitLinkLocales[locale][key].length > 0));
+    })())JS") == L"true", "all five locales define the audio diagnostics and export controls");
+    host.PostMessage(LR"({"state":{"locale":"zh-CN","audioPlaybackState":"captureStalled",
+        "audioStreaming":false,"audioTraceAvailable":true,"audioFillMs":3,"audioClockConfidence":87,
+        "audioStartupSilence":111,"audioRebufferFrames":222,"audioResetDiscardFrames":333,
+        "audioLocalReprimes":4,"audioUnderruns":555,"audioOverruns":666,"audioResyncs":7,
+        "audioSrcBypassed":true,"audioDrift":false}})");
+    Check(PumpUntil([&] {
+        return Script(view, LR"JS(document.querySelector('#audio-status').textContent === window.NitLinkLocales['zh-CN']['audio.captureStalled'] &&
+            document.querySelector('#audio-health').textContent.includes('87%') &&
+            !document.querySelector('#audio-export-trace').disabled)JS") == L"true";
+    }), "native state distinguishes capture stalls and enables trace export");
+    Check(Script(view, LR"JS((() => {
+        const text = document.querySelector('#audio-health').textContent;
+        return document.querySelector('#audio-diagnostics').hidden &&
+            ['111','222','333','555','666',window.NitLinkLocales['zh-CN']['audio.srcBypass']].every(value => text.includes(value));
+    })())JS") == L"true", "hidden diagnostics retain distinct counters and correctly identify SRC bypass");
+    const size_t before = messages.size();
+    Script(view, L"document.querySelector('#audio-debug').click()");
+    Check(Script(view, L"!document.querySelector('#audio-diagnostics').hidden && document.querySelector('#audio-debug').getAttribute('aria-expanded') === 'true'") == L"true",
+        "diagnostics visibility is an accessible local presentation toggle");
+    Check(messages.size()==before,"diagnostics toggle never changes audio processing through the native bridge");
+    Script(view, L"document.querySelector('#audio-export-trace').click()");
+    Check(PumpUntil([&] { return messages.size()==before+1; }),"trace export posts exactly one native action");
+    const auto exported = NitLink::ParseSettingsMessage(messages.back());
+    Check(exported && exported->action==L"exportAudioTrace" && exported->text.empty(),
+        "trace export delegates destination selection to native code");
+    Check(Script(view,L"Object.keys(" + messages.back() + L").length") == L"1",
+        "trace export message contains no value or path");
+    Script(view, L"document.querySelector('#audio-debug').click()");
+    Check(Script(view, L"document.querySelector('#audio-diagnostics').hidden") == L"true",
+        "diagnostics can be hidden after export");
+}
 }
 
 int main(int argc, char** argv) {
@@ -397,7 +442,7 @@ int main(int argc, char** argv) {
         Script(view, L"window.__fontsReady = false; document.fonts.ready.then(() => __fontsReady = true)");
         Check(PumpUntil([&] { return Script(view, L"window.__fontsReady") == L"true"; }), "bundled fonts loaded");
         if (captureOnly) CaptureLayouts(host, window, std::filesystem::path(argv[2]));
-        else TestLayouts(host, window, messages);
+        else { TestLayouts(host, window, messages); TestAudioDiagnostics(host, messages); }
         host.Shutdown();
     } catch (const std::exception& error) {
         std::cerr << "FAIL " << error.what() << '\n';

@@ -182,7 +182,7 @@ std::optional<SettingsMessage> ParseSettingsMessage(std::wstring_view json) {
         L"clearNoSignalImage", L"cycleNoSignalFit", L"cycleNoSignalDimImage",
         L"cyclePresentPacing", L"cycleAspect", L"cyclePanelSide", L"cycleScaler",
         L"clearGame", L"saveGameSettings", L"getDeviceList", L"refreshDevices",
-        L"openScreenshotFolder"})) {
+        L"openScreenshotFolder", L"exportAudioTrace"})) {
         if (value) return std::nullopt;
     } else if (OneOf(action, {L"toggleHDR", L"toggleColorExpansion", L"toggleNIS",
         L"toggleMute", L"toggleVSync", L"toggleLowLatency", L"togglePreventSleep"})) {

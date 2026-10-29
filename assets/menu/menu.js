@@ -147,6 +147,7 @@
     document.getElementById('audio-exclusive')?.addEventListener('change', e => post('setAudioExclusive', e.target.checked));
     document.getElementById('audio-drift')?.addEventListener('change', e => post('setAudioDrift', e.target.checked));
     document.getElementById('audio-refresh')?.addEventListener('click', () => post('ready'));
+    document.getElementById('audio-export-trace')?.addEventListener('click', () => post('exportAudioTrace'));
 
     // Diagnostics are a presentation preference, off at every application start.
     // Hiding the panel never changes audio processing or cumulative counters.
@@ -915,21 +916,30 @@
       if (renderInput) renderInput.disabled = s.audioExclusiveActive === true;
       const driftInput = document.getElementById('audio-drift');
       if (driftInput && typeof s.audioDrift === 'boolean') driftInput.checked = s.audioDrift;
+      const playbackStateKey = {
+        waiting: 'audio.waiting', priming: 'audio.priming', playing: 'audio.running',
+        rebuffering: 'audio.rebuffering', captureStalled: 'audio.captureStalled', recovering: 'audio.recovering'
+      }[s.audioPlaybackState] || (s.audioStreaming ? 'audio.running' : 'audio.waiting');
+      const playbackState = t(playbackStateKey);
       setText('audio-status', s.audioStreaming
-        ? `${t('audio.running')} · ${t(s.audioExclusiveActive ? 'audio.exclusiveMode' : 'audio.sharedMode')}`
-        : t('audio.waiting'));
+        ? `${playbackState} · ${t(s.audioExclusiveActive ? 'audio.exclusiveMode' : 'audio.sharedMode')}`
+        : playbackState);
+      const traceExport = document.getElementById('audio-export-trace');
+      if (traceExport && typeof s.audioTraceAvailable === 'boolean') traceExport.disabled = !s.audioTraceAvailable;
       const health = document.getElementById('audio-health');
       if (health && typeof s.audioFillMs === 'number') {
         const ms = value => Number.isFinite(value) ? value.toFixed(2) : '--';
-        health.textContent = `${s.audioStreaming ? t('audio.running') : t('audio.waiting')} · ${s.audioAdaptive ? 'Sinc SRC' : t('audio.fallback')} · ${s.audioDrift ? t('audio.driftOn') : t('audio.off')}\n` +
+        health.textContent = `${playbackState} · ${s.audioSrcBypassed ? t('audio.srcBypass') : s.audioAdaptive ? 'Sinc SRC' : t('audio.fallback')} · ${s.audioDrift ? t('audio.driftOn') : t('audio.off')}\n` +
           (s.audioExclusiveActive
             ? `${t('audio.exclusiveAuto')} · ${t('audio.block')} ${ms(s.audioEffectiveMs)} ms\nFIFO ${ms(s.audioFillMs)} ms (${t('audio.afterPump')})\n`
             : `${t('audio.requested')} ${ms(s.audioRenderMs)} ms → ${t('audio.effective')} ${ms(s.audioEffectiveMs)} ms\nFIFO ${ms(s.audioFillMs)} ms + ${t('audio.queued')} ${ms(s.audioQueueMs)} ms (${t('audio.afterPump')})\n`) +
           `FIFO ${t('audio.average')} ${ms(s.audioAverageMs)} ms [${ms(s.audioMinMs)}–${ms(s.audioMaxMs)}]\n` +
           `${t('audio.period')} ${ms(s.audioPeriodUs / 1000)} ms · ${t('audio.correction')} ${s.audioPpm} ppm\n` +
-          `${t('audio.clockEstimate')} ${s.audioClockValid ? s.audioEstimatedPpm + ' ppm' : t('audio.clockLearning')}\n` +
-          `${t('audio.underrunEvents')} ${s.audioUnderrunEvents ?? 0} · ${t('audio.reloads')} ${s.audioReloads ?? 0}\n` +
+          `${t('audio.clockEstimate')} ${s.audioClockValid ? s.audioEstimatedPpm + ' ppm' : t('audio.clockLearning')} · ${t('audio.confidence')} ${s.audioClockConfidence ?? 0}%\n` +
+          `${t('audio.underrunEvents')} ${s.audioUnderrunEvents ?? 0} · ${t('audio.localReprimes')} ${s.audioLocalReprimes ?? 0} · ${t('audio.reloads')} ${s.audioReloads ?? 0}\n` +
           `${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}\n` +
+          `${t('audio.startupSilence')} ${s.audioStartupSilence ?? 0} · ${t('audio.rebufferFrames')} ${s.audioRebufferFrames ?? 0}\n` +
+          `${t('audio.resetDiscardFrames')} ${s.audioResetDiscardFrames ?? 0}\n` +
           localizeEndpointInfo(s.audioEndpointInfo);
       }
 

@@ -76,6 +76,7 @@ set(NITLINK_SOURCES
     src/renderer/playback_power.h
     src/input/hotkey_manager.cpp
     src/input/hotkey_manager.h
+    src/audio/audio_trace.cpp
     src/audio/audio_router.cpp
     src/audio/audio_router.h
     src/overlay/no_signal_image.cpp
@@ -185,8 +186,21 @@ add_custom_target(NitLinkRuntimeResources
 )
 add_dependencies(NitLink NitLinkRuntimeResources)
 
+add_executable(NitLinkAudioReplay tools/audio_replay.cpp src/audio/audio_trace.cpp)
+target_include_directories(NitLinkAudioReplay PRIVATE ${CMAKE_SOURCE_DIR}/src)
+install(TARGETS NitLinkAudioReplay RUNTIME DESTINATION bin)
+install(FILES docs/audio-diagnostics.md DESTINATION bin/docs)
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(NitLinkAudioResamplerBenchmark tests/audio_resampler_benchmark.cpp)
+    target_include_directories(NitLinkAudioResamplerBenchmark PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_executable(NitLinkAudioProcessingTests tests/audio_processing_tests.cpp)
+    target_include_directories(NitLinkAudioProcessingTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME audio_processing COMMAND NitLinkAudioProcessingTests)
+    add_executable(NitLinkAudioTraceReplayTests tests/audio_trace_replay_tests.cpp src/audio/audio_trace.cpp)
+    target_include_directories(NitLinkAudioTraceReplayTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME audio_trace_replay COMMAND NitLinkAudioTraceReplayTests)
     add_executable(NitLinkAudioConversionTests tests/audio_conversion_tests.cpp)
     target_include_directories(NitLinkAudioConversionTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME audio_native_conversion COMMAND NitLinkAudioConversionTests)
@@ -214,7 +228,7 @@ if(BUILD_TESTING)
     target_link_libraries(NitLinkPipeSecurityTests PRIVATE advapi32)
     add_test(NAME pipe_security COMMAND NitLinkPipeSecurityTests)
 
-    add_executable(NitLinkMediaSecurityTests tests/media_security_tests.cpp)
+    add_executable(NitLinkMediaSecurityTests tests/media_security_tests.cpp src/audio/audio_trace.cpp)
     target_include_directories(NitLinkMediaSecurityTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(NitLinkMediaSecurityTests PRIVATE ole32 oleaut32 strmiids uuid mfuuid avrt)
     add_test(NAME media_metadata_security COMMAND NitLinkMediaSecurityTests)

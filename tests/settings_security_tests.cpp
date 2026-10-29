@@ -18,6 +18,14 @@ void Expect(bool value, const char* label) {
 
 int main() {
     using NitLink::ParseSettingsMessage;
+    Expect(ParseSettingsMessage(LR"({"action":"exportAudioTrace"})").has_value(), "audio trace opens native save dialog without web path");
+    for (auto invalid : {
+        LR"({"action":"exportAudioTrace","value":"C:\\trace.csv"})",
+        LR"({"action":"exportAudioTrace","value":{"path":"C:\\trace.csv"}})",
+        LR"({"action":"exportAudioTrace","value":true})",
+        LR"({"action":"exportAudioTrace","path":"C:\\trace.csv"})",
+        LR"({"action":"exportAudioTrace","value":null})"})
+        Expect(!ParseSettingsMessage(invalid), "audio trace rejects arbitrary web filenames and values");
     for (auto action : {L"setAudioFifoMs", L"setAudioRenderMs"}) {
         const auto prefix = L"{\"action\":\"" + std::wstring(action) + L"\",\"value\":";
         for (auto valid : {L"3", L"12", L"100"})
@@ -47,7 +55,8 @@ int main() {
          L"toast.settingsProfile", L"toast.settingsRuntime", L"toast.settingsStartFailed",
          L"toast.settingsFiles", L"toast.settingsSecurity", L"toast.settingsMemory",
          L"toast.settingsResources", L"toast.settingsNavigation", L"toast.settingsProcessFailed",
-         L"toast.settingsTimeout", L"toast.settingsStarting", L"toast.settingsRetry"}) {
+         L"toast.settingsTimeout", L"toast.settingsStarting", L"toast.settingsRetry",
+         L"dialog.exportAudioTrace", L"dialog.audioTraceFilter", L"toast.audioTraceSaved", L"toast.audioTraceFailed"}) {
         localization.SetPreference("en-US");
         const auto english = localization.Get(key);
         localization.SetPreference("zh-TW");
@@ -89,7 +98,7 @@ int main() {
          L"clearNoSignalImage", L"cycleNoSignalFit", L"cycleNoSignalDimImage",
          L"cyclePresentPacing", L"cycleAspect", L"cyclePanelSide", L"cycleScaler",
          L"clearGame", L"saveGameSettings", L"getDeviceList", L"refreshDevices",
-         L"openScreenshotFolder"}) {
+         L"openScreenshotFolder", L"exportAudioTrace"}) {
         const auto prefix = L"{\"action\":\"" + std::wstring(action) + L"\"";
         Expect(ParseSettingsMessage(prefix + L"}").has_value(), "action without value");
         Expect(!ParseSettingsMessage(prefix + L",\"value\":true}"), "unexpected value");

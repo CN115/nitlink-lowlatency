@@ -70,6 +70,7 @@ private:
     // driven state changes (Alt+H for HDR), and on the once-per-second
     // stats tick while the menu is visible.
     void PushSettingsState(bool refreshCaptureDevices = false);
+    bool ExportAudioTrace();
     void SetPiPOpacity(float opacity);
 
     // Game selector helpers. ApplyGameSettings loads the per-game settings
@@ -261,6 +262,7 @@ private:
     void DrawStatusNotice(bool takingScreenshot);
     bool m_settingsOpenPending = false;
     bool m_settingsVisible = false;
+    bool m_audioTraceExporting = false;
     std::unique_ptr<Config>           m_config;
     std::unique_ptr<DiscordRPC>       m_discord;
     std::chrono::system_clock::time_point m_discordActivityStart{};

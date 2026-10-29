@@ -1,7 +1,21 @@
 // NitLink German (Germany) UI resource.
 window.NitLinkLocales = window.NitLinkLocales || {};
 window.NitLinkLocales['de-DE'] = {
-  "audio.driftHelp": "Gleicht Taktunterschiede zwischen Aufnahme und Wiedergabe aus, um langfristigen Rückstau oder Unterläufe zu verringern. Anhaltende Fehler laden das Audio neu. Das FIFO-Ziel wird nie automatisch erhöht.",
+  "audio.priming": "Wiedergabe startet",
+  "audio.rebuffering": "Puffer wird gefüllt",
+  "audio.captureStalled": "Warten auf Aufnahmepakete",
+  "audio.recovering": "Audio wird wiederhergestellt",
+  "audio.confidence": "Zuverlässigkeit",
+  "audio.localReprimes": "Lokale Neufüllungen",
+  "audio.startupSilence": "Start-Stilleframes",
+  "audio.rebufferFrames": "Neupufferungsframes",
+  "audio.resetDiscardFrames": "Beim Reset verworfene Frames",
+  "audio.srcBypass": "SRC-Bypass",
+  "audio.trace": "Audio-Protokoll",
+  "audio.exportTrace": "CSV exportieren",
+  "audio.traceHelp": "Speichert die letzten Zeit-, FIFO-, Takt- und Wiederherstellungsereignisse zur Offline-Analyse. Enthält keine Audiodaten oder Gerätenamen. Der Speicherort wird im Windows-Dialog gewählt.",
+  "audio.countersHelp": "Fehlende Frames zählen fehlende Eingaben während der Wiedergabe. Startstille und Neupufferung werden separat gezählt; Reset-Verluste zählen bei der Wiederherstellung verworfene Eingaben. Eine lokale Neufüllung behält das FIFO-Ziel und öffnet keine Geräte neu.",
+  "audio.driftHelp": "Gleicht Taktunterschiede mit einer nach Zuverlässigkeit gewichteten Schätzung und FIFO-Rückkopplung aus. Zuerst wird der Puffer lokal neu gefüllt; anhaltende Fehler lösen weitere Schritte aus. Das FIFO-Ziel wird nie automatisch erhöht.",
   "audio.renderHelp": "Ziel der Wiedergabewarteschlange im geteilten Modus. Das tatsächliche Minimum bestimmen Windows und der Treiber. Der exklusive Modus verwendet automatisch die minimale Treiberperiode, daher ist diese Einstellung deaktiviert.",
   "audio.fifoHelp": "Pufferziel zwischen Aufnahme und Wiedergabe, 3–100 ms. Niedrigere Werte verringern die Latenz, reagieren aber empfindlicher auf Paket- und Scheduling-Jitter. Änderungen starten das Audio kurz neu.",
   "audio.sharedMode": "Geteilt",
@@ -14,7 +28,7 @@ window.NitLinkLocales['de-DE'] = {
   "audio.clockLearning": "Wird ermittelt / nicht verfügbar",
   "audio.underrunEvents": "Unterlaufereignisse",
   "audio.reloads": "Automatische Neuladungen",
-  "audio.recoveryHelp": "Die Driftkorrektur nutzt Taktschätzungen des Geräts über mehrere Blöcke sowie FIFO-Rückmeldung. Gewöhnliche Unterläufe behalten die Schätzung bei. Beide Audio-Endpunkte werden nach 3 Unterläufen oder 20 ms fehlendem Audio innerhalb von 2 s neu geladen, ebenso bei einem Warteschlangenfehler von mindestens 20 ms (und zwei Ausgabeblöcken), der 250 ms anhält. Wartezeit zwischen Neuladungen: 10 s. Das FIFO-Ziel wird nie erhöht. Das Deaktivieren der Driftkorrektur deaktiviert auch die schwellenbasierten Neuladungen.",
+  "audio.recoveryHelp": "Fehlende Audiodaten werden in einem gleitenden Zeitfenster bewertet. Zuerst wird der FIFO lokal neu gefüllt, bei anhaltenden Fehlern die Wiedergabe und zuletzt beide Endpunkte neu gestartet. Wartezeiten verhindern Neustartschleifen. Das FIFO-Ziel bleibt fest; Aufnahmestillstand wird auch ohne Driftkorrektur erkannt.",
 
   "audio.endpoint.0": "exklusiv ausgesetzt: Fenster inaktiv, ausgeblendet, minimiert oder erhält wieder den Fokus",
   "audio.endpoint.1": "Kompatibel geteilt (Windows-Konvertierung)",
