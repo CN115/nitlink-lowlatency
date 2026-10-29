@@ -144,6 +144,14 @@ if errorlevel 1 (
   )
 )
 
+REM --- Audio replay and diagnostic documentation ----------------------------
+copy /y "%BUILD_DIR%\NitLinkAudioReplay.exe" "%STAGING_DIR%\" >nul
+if errorlevel 1 exit /b 1
+copy /y "docs\audio-diagnostics.md" "%STAGING_DIR%\docs\" >nul
+if errorlevel 1 exit /b 1
+copy /y "AUDIO_TESTING.txt" "%STAGING_DIR%\" >nul
+if errorlevel 1 exit /b 1
+
 REM --- License + attribution files (required for redistribution) ------------
 echo Copying LICENSE (project MIT)...
 copy /y "LICENSE" "%STAGING_DIR%\" >nul

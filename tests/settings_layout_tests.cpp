@@ -373,7 +373,7 @@ void TestAudioDiagnostics(WebViewSettings& host, std::vector<std::wstring>& mess
         const keys = ['audio.priming','audio.rebuffering','audio.captureStalled','audio.recovering',
             'audio.confidence','audio.localReprimes','audio.startupSilence','audio.rebufferFrames',
             'audio.resetDiscardFrames','audio.srcBypass','audio.trace','audio.exportTrace',
-            'audio.traceHelp','audio.countersHelp'];
+            'audio.traceHelp','audio.countersHelp','audio.clockLearning','audio.clockHolding','audio.clockUnavailable'];
         return ['en-US','zh-TW','zh-CN','de-DE','ko-KR'].every(locale =>
             keys.every(key => typeof window.NitLinkLocales[locale][key] === 'string' &&
                 window.NitLinkLocales[locale][key].length > 0));
@@ -408,6 +408,20 @@ void TestAudioDiagnostics(WebViewSettings& host, std::vector<std::wstring>& mess
     Script(view, L"document.querySelector('#audio-debug').click()");
     Check(Script(view, L"document.querySelector('#audio-diagnostics').hidden") == L"true",
         "diagnostics can be hidden after export");
+    for (unsigned state : {0u,1u,2u,3u}) {
+        host.PostMessage(L"{\"state\":{\"audioClockState\":" + std::to_wstring(state) +
+            LR"(,"audioClockValid":false,"audioEstimatedPpm":123,"audioClockConfidence":61,"audioFillMs":3}})");
+        const auto script = L"(() => { const state = " + std::to_wstring(state) + LR"JS(;
+            const words = window.NitLinkLocales['zh-CN'];
+            const states = [words['audio.clockLearning'], '123 ppm',
+                '123 ppm (' + words['audio.clockHolding'] + ')', words['audio.clockUnavailable']];
+            const line = document.querySelector('#audio-health').textContent.split('\n')
+                .find(value => value.startsWith(words['audio.clockEstimate'] + ' '));
+            return line === words['audio.clockEstimate'] + ' ' + states[state] + ' · ' + words['audio.confidence'] + ' 61%';
+        })())JS";
+        Check(PumpUntil([&] { return Script(view,script)==L"true"; }),
+            "clock display distinguishes learning, fresh, holding and unavailable while keeping confidence");
+    }
 }
 }
 

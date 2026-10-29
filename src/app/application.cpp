@@ -5108,6 +5108,7 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
         js << L"\"audioPpm\":" << m_audioRouter->DriftPpm() << L",";
         js << L"\"audioEstimatedPpm\":" << m_audioRouter->EstimatedDriftPpm() << L",";
         js << L"\"audioClockValid\":" << (m_audioRouter->ClockEstimateValid() ? L"true" : L"false") << L",";
+        js << L"\"audioClockState\":" << unsigned(m_audioRouter->ClockState()) << L",";
         js << L"\"audioClockConfidence\":" << m_audioRouter->ClockConfidencePercent() << L",";
         js << L"\"audioStartupSilence\":" << m_audioRouter->StartupSilenceFrames() << L",";
         js << L"\"audioRebufferFrames\":" << m_audioRouter->RebufferFrames() << L",";

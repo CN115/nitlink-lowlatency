@@ -5,14 +5,14 @@ if ((Get-Item -LiteralPath $packageRoot).Attributes -band [IO.FileAttributes]::R
     throw 'Package root cannot be a reparse point.'
 }
 $required = @(
-    'NitLink.exe', 'nitlink-menu.html', 'locales/en-US.js', 'locales/zh-TW.js', 'locales/zh-CN.js', 'locales/de-DE.js', 'locales/ko-KR.js',
+    'NitLink.exe', 'NitLinkAudioReplay.exe', 'docs/audio-diagnostics.md', 'nitlink-menu.html', 'locales/en-US.js', 'locales/zh-TW.js', 'locales/zh-CN.js', 'locales/de-DE.js', 'locales/ko-KR.js',
     'assets/menu/menu.js', 'assets/menu/Archivo-400.ttf', 'assets/menu/Archivo-500.ttf',
     'assets/menu/Archivo-600.ttf', 'assets/menu/Archivo-OFL.txt', 'assets/menu/kofi-cup.png',
     'third_party/nis/NIS_Scaler.h', 'third_party/nis/LICENSE.txt',
     'LICENSE', 'LICENSES.md', 'ACKNOWLEDGMENTS.md'
 )
 $runtimeDlls = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll')
-$allowed = $required + $runtimeDlls + @('README.txt', 'RELEASE-NOTES.md', 'docs/4ks-hdr-tonemap.md', 'SHA256SUMS.txt')
+$allowed = $required + $runtimeDlls + @('AUDIO_TESTING.txt', 'BUILD.txt', 'README.txt', 'RELEASE-NOTES.md', 'docs/4ks-hdr-tonemap.md', 'SHA256SUMS.txt')
 $pending = [Collections.Generic.Stack[string]]::new()
 $pending.Push($packageRoot)
 $files = @{}

@@ -929,13 +929,18 @@
       const health = document.getElementById('audio-health');
       if (health && typeof s.audioFillMs === 'number') {
         const ms = value => Number.isFinite(value) ? value.toFixed(2) : '--';
+        const clockState = Number.isInteger(s.audioClockState) ? s.audioClockState : (s.audioClockValid ? 1 : 0);
+        const clockPpm = Number.isFinite(s.audioEstimatedPpm) ? `${s.audioEstimatedPpm} ppm` : '--';
+        const clockEstimate = clockState === 1 ? clockPpm
+          : clockState === 2 ? `${clockPpm} (${t('audio.clockHolding')})`
+          : t(clockState === 3 ? 'audio.clockUnavailable' : 'audio.clockLearning');
         health.textContent = `${playbackState} · ${s.audioSrcBypassed ? t('audio.srcBypass') : s.audioAdaptive ? 'Sinc SRC' : t('audio.fallback')} · ${s.audioDrift ? t('audio.driftOn') : t('audio.off')}\n` +
           (s.audioExclusiveActive
             ? `${t('audio.exclusiveAuto')} · ${t('audio.block')} ${ms(s.audioEffectiveMs)} ms\nFIFO ${ms(s.audioFillMs)} ms (${t('audio.afterPump')})\n`
             : `${t('audio.requested')} ${ms(s.audioRenderMs)} ms → ${t('audio.effective')} ${ms(s.audioEffectiveMs)} ms\nFIFO ${ms(s.audioFillMs)} ms + ${t('audio.queued')} ${ms(s.audioQueueMs)} ms (${t('audio.afterPump')})\n`) +
           `FIFO ${t('audio.average')} ${ms(s.audioAverageMs)} ms [${ms(s.audioMinMs)}–${ms(s.audioMaxMs)}]\n` +
           `${t('audio.period')} ${ms(s.audioPeriodUs / 1000)} ms · ${t('audio.correction')} ${s.audioPpm} ppm\n` +
-          `${t('audio.clockEstimate')} ${s.audioClockValid ? s.audioEstimatedPpm + ' ppm' : t('audio.clockLearning')} · ${t('audio.confidence')} ${s.audioClockConfidence ?? 0}%\n` +
+          `${t('audio.clockEstimate')} ${clockEstimate} · ${t('audio.confidence')} ${s.audioClockConfidence ?? 0}%\n` +
           `${t('audio.underrunEvents')} ${s.audioUnderrunEvents ?? 0} · ${t('audio.localReprimes')} ${s.audioLocalReprimes ?? 0} · ${t('audio.reloads')} ${s.audioReloads ?? 0}\n` +
           `${t('audio.underruns')} ${s.audioUnderruns} · ${t('audio.dropped')} ${s.audioOverruns} · ${t('audio.resyncs')} ${s.audioResyncs}\n` +
           `${t('audio.startupSilence')} ${s.audioStartupSilence ?? 0} · ${t('audio.rebufferFrames')} ${s.audioRebufferFrames ?? 0}\n` +

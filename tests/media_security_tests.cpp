@@ -37,7 +37,8 @@ struct ExclusiveState {
     int activations=0, initializes=0, gets=0, releases=0, paddings=0, starts=0;
     UINT32 frames=48, lastFlags=0;
     REFERENCE_TIME minimum=10000;
-    bool alignment=false, unsupported=false;
+    bool alignment=false, unsupported=false, clockEnabled=false;
+    UINT64 clockFrames=0;
     HRESULT getError=S_OK, startError=S_OK;
     std::vector<REFERENCE_TIME> periods;
     std::vector<BYTE> bytes=std::vector<BYTE>(4096);
@@ -59,6 +60,20 @@ public:
         Check(frames==s.frames,"exclusive ReleaseBuffer must release a whole block");
         ++s.releases; s.lastFlags=flags; return S_OK;
     }
+};
+class FakeClock final : public IAudioClock {
+    ULONG refs=1; ExclusiveState& s;
+public:
+    explicit FakeClock(ExclusiveState& state):s(state) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** p) override { *p=nullptr; return E_NOINTERFACE; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+    ULONG STDMETHODCALLTYPE Release() override { auto n=--refs; if (!n) delete this; return n; }
+    HRESULT STDMETHODCALLTYPE GetFrequency(UINT64* frequency) override { *frequency=48000; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetPosition(UINT64* position,UINT64* qpc) override {
+        s.clockFrames+=s.frames; *position=s.clockFrames;
+        *qpc=1000000000ULL+s.clockFrames*10000000/48000; return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetCharacteristics(DWORD* characteristics) override { *characteristics=0; return S_OK; }
 };
 class FakeAudio final : public IAudioClient {
     ULONG refs=1; ExclusiveState& s;
@@ -93,6 +108,9 @@ public:
     HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
     HRESULT STDMETHODCALLTYPE SetEventHandle(HANDLE) override { return S_OK; }
     HRESULT STDMETHODCALLTYPE GetService(REFIID id,void** p) override {
+        if (id==__uuidof(IAudioClock) && s.clockEnabled) {
+            *p=static_cast<IAudioClock*>(new FakeClock(s)); return S_OK;
+        }
         if (id!=__uuidof(IAudioRenderClient)) { *p=nullptr; return E_NOINTERFACE; }
         *p=static_cast<IAudioRenderClient*>(new FakeRender(s)); return S_OK;
     }
@@ -116,6 +134,7 @@ struct CaptureState {
     unsigned pending=100, gets=0, releases=0;
     UINT32 frames=480;
     DWORD flags=0;
+    HRESULT nextError=S_OK;
     std::vector<int16_t> samples=std::vector<int16_t>(480*2,12000);
 };
 class FakeCapture final : public IAudioCaptureClient {
@@ -136,6 +155,7 @@ public:
         --s.pending; ++s.releases; return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetNextPacketSize(UINT32* frames) override {
+        if (FAILED(s.nextError)) return s.nextError;
         *frames=s.pending ? s.frames : 0; return S_OK;
     }
 };
@@ -143,8 +163,8 @@ namespace NitLink {
 struct AudioRouterTestAccess {
     static void TraceReplay() {
         WAVEFORMATEX pcm{WAVE_FORMAT_PCM,2,48000,192000,4,16,0};
-        CaptureState capture; capture.pending=64;
-        ExclusiveState render; render.frames=144; render.minimum=30000;
+        CaptureState capture; capture.pending=400;
+        ExclusiveState render; render.frames=144; render.minimum=30000; render.clockEnabled=true;
         FakeDevice device(render); AudioRouter router;
         router.SetLatency(3,3,true);
         router.m_traceSession=1;
@@ -162,7 +182,7 @@ struct AudioRouterTestAccess {
         // Every policy timestamp comes from the real router. Only WASAPI
         // supplies deterministic packets; no synthetic ordering can hide a
         // missing reset or a trace event emitted after its dependent decision.
-        for (int i=0;i<160;++i) {
+        for (int i=0;i<800;++i) {
             capture.flags=i==5 ? AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR :
                 i==8 ? AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY : 0;
             bool renderReady=true;
@@ -180,6 +200,8 @@ struct AudioRouterTestAccess {
             replay.startupSilenceFrames==router.StartupSilenceFrames(),"trace replay preserves actual silence accounting");
         Check(replay.startupSilenceFrames>0 && replay.rebufferFrames>0 && replay.missingFrames>0,
             "real pipeline replay includes startup, playback starvation and rebuffering");
+        Check(router.ClockEstimateValid() && router.ClockConfidencePercent()>90,
+            "trace exercises learned device-clock estimates as well as startup learning");
         router.TeardownRender(); router.TeardownCapture();
     }
     static void ProcessingPaths() {
@@ -242,6 +264,18 @@ struct AudioRouterTestAccess {
         renderReady=false; SetEvent(router.m_renderEvent);
         Check(router.DrainCapture(renderReady) && renderReady && capture.gets-oldGets<=4,
             "capture pass notices newly ready playback and tightens its budget");
+        const double stalledAt=AudioNow();
+        router.m_captureWatchdog.Reset(stalledAt-1.2);
+        for (int i=0;i<=60;++i)
+            router.m_captureWatchdog.Progress(stalledAt-1.2+i*.01,uint64_t(i)*480,480);
+        router.m_restartCapture=false;
+        capture.nextError=E_FAIL;
+        Check(!router.DrainCapture(renderReady) && !router.m_restartCapture,
+            "unclassified capture error returns control without immediate rebuild loop");
+        router.CheckCaptureProgress(AudioNow());
+        Check(router.m_restartCapture && router.AutomaticReloads()==1 &&
+            router.PlaybackState()==AudioPlaybackState::CaptureStalled,
+            "capture progress watchdog still detects a stream returning nonfatal errors");
         router.m_running=false;
         router.TeardownRender(); router.TeardownCapture();
     }

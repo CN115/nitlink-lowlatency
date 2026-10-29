@@ -64,6 +64,7 @@ public:
     uint64_t ResetDiscardFrames() const { return m_resetDiscardFrames.load(); }
     uint64_t LocalReprimes() const { return m_localReprimes.load(); }
     unsigned ClockConfidencePercent() const { return m_clockConfidence.load(); }
+    AudioClockState ClockState() const { return m_clockState.load(); }
     bool ExportTrace(const std::filesystem::path& path, std::string& error) { return m_trace.ExportCsv(path,error); }
     bool ClockEstimateValid() const { return m_clockEstimateValid.load(); }
     uint64_t UnderrunEvents() const { return m_underrunEvents.load(); }
@@ -156,6 +157,7 @@ private:
     std::atomic<AudioPlaybackState> m_playbackState{AudioPlaybackState::Waiting};
     std::atomic<uint64_t> m_startupSilenceFrames{0}, m_rebufferFrames{0}, m_resetDiscardFrames{0}, m_localReprimes{0};
     std::atomic<unsigned> m_clockConfidence{0};
+    std::atomic<AudioClockState> m_clockState{AudioClockState::Learning};
     bool m_hasPlayed = false, m_captureStalled = false;
     bool m_conversionReady = false;
     mutable std::mutex m_endpointInfoMutex;
@@ -192,6 +194,9 @@ private:
     std::chrono::steady_clock::time_point m_lastDrift{};
 
     std::wstring m_nameHint = L"Elgato";
+    std::wstring m_watchdogCaptureDeviceId;
+    HRESULT m_lastStreamError[2] = {S_OK,S_OK};
+    double m_lastStreamErrorLog[2] = {0,0};
 
     ComPtr<IMMDeviceEnumerator> m_enumerator;
     ComPtr<IMMNotificationClient> m_notifier;
@@ -251,6 +256,7 @@ private:
     // catches everything else, including in-place format changes.
     std::atomic<bool>  m_restartCapture{false};
     std::atomic<bool>  m_restartRender{false};
+    std::atomic<DriftResetReason> m_renderResetReason{DriftResetReason::DeviceChange};
 
     // Reports the first attempt's outcome back to Initialize().
     std::mutex              m_startMutex;
