@@ -1,0 +1,77 @@
+name: Build Windows ZIP for dc5178d
+on:
+  push:
+    branches: [codex/package-main-dc5178d]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dc5178df82548487eee46efded4acb8f71b43fc7
+          path: source
+          persist-credentials: false
+      - name: Verify source revision and translations
+        shell: pwsh
+        run: |
+          $expected = 'dc5178df82548487eee46efded4acb8f71b43fc7'
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) { throw "Incorrect source revision: $actual" }
+          Write-Output "Source commit: $actual"
+          node scripts/validate-locales.js
+      - name: Configure x64 Release
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON -DNITLINK_TEST_WEBVIEW_RUNTIME=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+      - name: Run full test suite
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 90
+      - name: Package with upstream packager
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw 'VC++ runtime folder not found' }
+          foreach ($dll in @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll')) {
+            $file = Join-Path $crt.FullName $dll
+            if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file build/Release/ }
+          }
+          cmd /d /c 'package.bat < NUL'
+          if ($LASTEXITCODE -ne 0) { throw "Packager exit code: $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath 'NitLink-1.2.6-win64.zip')) { throw 'Windows ZIP not created' }
+          $root = (Resolve-Path 'NitLink-1.2.6-win64').Path
+          $manifest = Get-Content -Raw (Join-Path $root 'SHA256SUMS.txt')
+          Expand-Archive 'NitLink-1.2.6-win64.zip' -DestinationPath zip-check
+          $extracted = 'zip-check/NitLink-1.2.6-win64'
+          $saved = Get-Content -Raw (Join-Path $extracted 'SHA256SUMS.txt')
+          if ($saved -cne $manifest) { throw 'ZIP manifest differs from staging' }
+          & ./scripts/validate-package.ps1 -Path $extracted
+          if ((Get-Content -Raw (Join-Path $extracted 'SHA256SUMS.txt')) -cne $saved) {
+            throw 'Extracted package contents differ from manifest'
+          }
+          New-Item -ItemType Directory -Force delivery | Out-Null
+          $filename = 'NitLink-CN115-1.2.6-main-dc5178d-win64.zip'
+          Move-Item -LiteralPath 'NitLink-1.2.6-win64.zip' -Destination "delivery/$filename"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "delivery/$filename").Hash.ToLowerInvariant()
+          "$hash  $filename" | Set-Content -Encoding utf8 delivery/SHA256SUMS.txt
+          "source=$(git rev-parse HEAD)`nvariant=CN115 synced main`nworkflow=$env:GITHUB_SHA" |
+            Set-Content -Encoding utf8 delivery/BUILD.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NitLink-CN115-1.2.6-main-dc5178d-win64
+          path: source/delivery/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-test-results
+          path: |
+            source/build/Testing/Temporary/LastTest.log
+            source/build/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
