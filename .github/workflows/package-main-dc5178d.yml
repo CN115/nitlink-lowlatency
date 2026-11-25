@@ -31,21 +31,34 @@ jobs:
         run: cmake --build build --config Release --parallel 4
       - name: Run full test suite
         run: ctest --test-dir build -C Release --output-on-failure --timeout 90
-      - name: Package with upstream packager
+      - name: Stage and validate the Windows package
         shell: pwsh
         run: |
+          cmake --install build --config Release --prefix package-stage
+          if ($LASTEXITCODE -ne 0) { throw "CMake install failed: $LASTEXITCODE" }
+          Move-Item -LiteralPath package-stage/bin -Destination NitLink-1.2.6-win64
+          $root = (Resolve-Path 'NitLink-1.2.6-win64').Path
           $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
           $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory |
             Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $crt) { throw 'VC++ runtime folder not found' }
           foreach ($dll in @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll')) {
             $file = Join-Path $crt.FullName $dll
-            if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file build/Release/ }
+            if (Test-Path -LiteralPath $file) { Copy-Item -LiteralPath $file $root }
           }
-          cmd /d /c 'package.bat < NUL'
-          if ($LASTEXITCODE -ne 0) { throw "Packager exit code: $LASTEXITCODE" }
-          if (-not (Test-Path -LiteralPath 'NitLink-1.2.6-win64.zip')) { throw 'Windows ZIP not created' }
-          $root = (Resolve-Path 'NitLink-1.2.6-win64').Path
+          New-Item -ItemType Directory -Path (Join-Path $root 'docs') | Out-Null
+          Copy-Item -LiteralPath docs/4ks-hdr-tonemap.md (Join-Path $root 'docs')
+          Copy-Item -LiteralPath release-notes-1.2.6.md (Join-Path $root 'RELEASE-NOTES.md')
+          @(
+            'NitLink 1.2.6 for Windows x64'
+            'Source commit: dc5178df82548487eee46efded4acb8f71b43fc7'
+            ''
+            'Extract the entire folder and run NitLink.exe.'
+            'Requires Windows 10 1809 or later, a DirectX 11 capable GPU, and the WebView2 Evergreen Runtime.'
+            'Press F1 to open Settings. See RELEASE-NOTES.md for changes and LICENSES.md for third-party notices.'
+          ) | Set-Content -Encoding utf8 (Join-Path $root 'README.txt')
+          & ./scripts/validate-package.ps1 -Path $root
+          Compress-Archive -LiteralPath $root -DestinationPath 'NitLink-1.2.6-win64.zip'
           $manifest = Get-Content -Raw (Join-Path $root 'SHA256SUMS.txt')
           Expand-Archive 'NitLink-1.2.6-win64.zip' -DestinationPath zip-check
           $extracted = 'zip-check/NitLink-1.2.6-win64'
